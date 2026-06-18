@@ -1,0 +1,10 @@
+scons platform=linuxbsd target=editor
+scons platform=windows target=editor arch=x86_64 use_mingw=yes -j"$(nproc)" d3d12=no
+production=yes # dont use i think
+
+export JAVA_HOME=/home/mikael/MyStuff/jdk-17.0.19+10
+export PATH="$JAVA_HOME/bin:$PATH"
+scons platform=android target=template_release arch=arm32 swappy=yes
+scons platform=android target=template_release arch=arm64 generate_apk=yes swappy=yes
+scons platform=android target=template_debug arch=arm32 swappy=yes
+scons platform=android target=template_debug arch=arm64 generate_apk=yes swappy=yes
