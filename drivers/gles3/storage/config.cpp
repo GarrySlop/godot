@@ -193,6 +193,29 @@ Config::Config() {
 			external_texture_supported = false;
 		}
 	}
+
+	// glCopyImageSubData is core in GLES 3.2 and exposed via GL_EXT/OES_copy_image
+	// otherwise. It is required to copy multiview (array) textures layer-for-layer,
+	// because some drivers (e.g. Adreno) silently collapse per-layer framebuffer
+	// attachment writes to layer 0.
+	eglCopyImageSubData = (PFNGLCOPYIMAGESUBDATAPROC)eglGetProcAddress("glCopyImageSubData");
+	if (eglCopyImageSubData == nullptr) {
+		eglCopyImageSubData = (PFNGLCOPYIMAGESUBDATAPROC)eglGetProcAddress("glCopyImageSubDataEXT");
+	}
+	if (eglCopyImageSubData == nullptr) {
+		eglCopyImageSubData = (PFNGLCOPYIMAGESUBDATAPROC)eglGetProcAddress("glCopyImageSubDataOES");
+	}
+	copy_image_supported = eglCopyImageSubData != nullptr;
+#else
+	// Desktop GL provides glCopyImageSubData through the loader when available
+	// (GL 4.3 / ARB_copy_image). It is only used by the multiview copy path.
+	{
+		GLint gl_major = 0;
+		GLint gl_minor = 0;
+		glGetIntegerv(GL_MAJOR_VERSION, &gl_major);
+		glGetIntegerv(GL_MINOR_VERSION, &gl_minor);
+		copy_image_supported = extensions.has("GL_ARB_copy_image") || gl_major > 4 || (gl_major == 4 && gl_minor >= 3);
+	}
 #endif
 
 	force_vertex_shading = GLOBAL_GET("rendering/shading/overrides/force_vertex_shading");
