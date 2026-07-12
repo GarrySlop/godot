@@ -2886,22 +2886,108 @@ void RasterizerSceneGLES3::render_scene(const Ref<RenderSceneBuffers> &p_render_
 		GLuint backbuffer_depth = rb->get_backbuffer_depth();
 
 		if (backbuffer_fbo != 0) {
-			glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
-			glReadBuffer(GL_COLOR_ATTACHMENT0);
-			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, backbuffer_fbo);
-			if (scene_state.used_screen_texture) {
-				glBlitFramebuffer(0, 0, size.x, size.y,
-						0, 0, size.x, size.y,
-						GL_COLOR_BUFFER_BIT, GL_NEAREST);
-				glActiveTexture(GL_TEXTURE0 + config->max_texture_image_units - 6);
-				glBindTexture(GL_TEXTURE_2D, backbuffer);
-			}
-			if (scene_state.used_depth_texture) {
-				glBlitFramebuffer(0, 0, size.x, size.y,
-						0, 0, size.x, size.y,
-						GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT, GL_NEAREST);
-				glActiveTexture(GL_TEXTURE0 + config->max_texture_image_units - 7);
-				glBindTexture(GL_TEXTURE_2D, backbuffer_depth);
+			uint32_t backbuffer_view_count = rb->get_view_count();
+
+			if (backbuffer_view_count > 1) {
+				// Multiview (stereo): the backbuffer color/depth textures are
+				// GL_TEXTURE_2D_ARRAY with one layer per view, and the shader samples them
+				// as sampler2DArray using ViewIndex. A plain glBlitFramebuffer between the
+				// layered (multiview) framebuffers only copies layer 0, so both views must
+				// be copied explicitly. Without this, hint_screen_texture /
+				// hint_depth_texture return black in VR on the Compatibility renderer.
+				//
+				// Rather than guess which buffer we rendered into (internal, render target,
+				// ...), query the textures actually attached to the render framebuffer so
+				// every layer of the real source is copied. Attachments backed by a
+				// renderbuffer (e.g. 3D MSAA) cannot be copied this way and are a separate
+				// pre-existing limitation that is intentionally not handled here.
+				glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+
+				GLint src_color = 0;
+				GLint src_depth = 0;
+				GLint src_color_type = GL_NONE;
+				GLint src_depth_type = GL_NONE;
+				if (scene_state.used_screen_texture) {
+					glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &src_color_type);
+					glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &src_color);
+				}
+				if (scene_state.used_depth_texture) {
+					glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &src_depth_type);
+					glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &src_depth);
+				}
+
+				bool copy_color = scene_state.used_screen_texture && src_color_type == GL_TEXTURE && src_color != 0;
+				bool copy_depth = scene_state.used_depth_texture && src_depth_type == GL_TEXTURE && src_depth != 0;
+
+				// Copy every view's layer in a single call. Per-layer framebuffer blits
+				// cannot be used here: some drivers (e.g. Adreno) silently redirect every
+				// glFramebufferTextureLayer write to layer 0, leaving the second eye's
+				// backbuffer layer empty. glCopyImageSubData copies the whole array (all
+				// views) at once and is not affected by that bug.
+				if (config->copy_image_supported) {
+					if (copy_color) {
+						glCopyImageSubData(src_color, GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0,
+								backbuffer, GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0,
+								size.x, size.y, backbuffer_view_count);
+					}
+					if (copy_depth) {
+						glCopyImageSubData(src_depth, GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0,
+								backbuffer_depth, GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0,
+								size.x, size.y, backbuffer_view_count);
+					}
+				} else {
+					// Fallback: per-layer blit (correct on drivers without the layer bug).
+					GLuint copy_fbos[2]; // read, write
+					glGenFramebuffers(2, copy_fbos);
+					glBindFramebuffer(GL_READ_FRAMEBUFFER, copy_fbos[0]);
+					glBindFramebuffer(GL_DRAW_FRAMEBUFFER, copy_fbos[1]);
+
+					for (uint32_t v = 0; v < backbuffer_view_count; v++) {
+						if (copy_color) {
+							glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, src_color, 0, v);
+							glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, backbuffer, 0, v);
+							glBlitFramebuffer(0, 0, size.x, size.y,
+									0, 0, size.x, size.y,
+									GL_COLOR_BUFFER_BIT, GL_NEAREST);
+						}
+						if (copy_depth) {
+							glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, src_depth, 0, v);
+							glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, backbuffer_depth, 0, v);
+							glBlitFramebuffer(0, 0, size.x, size.y,
+									0, 0, size.x, size.y,
+									GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT, GL_NEAREST);
+						}
+					}
+
+					glDeleteFramebuffers(2, copy_fbos);
+				}
+
+				if (scene_state.used_screen_texture) {
+					glActiveTexture(GL_TEXTURE0 + config->max_texture_image_units - 6);
+					glBindTexture(GL_TEXTURE_2D_ARRAY, backbuffer);
+				}
+				if (scene_state.used_depth_texture) {
+					glActiveTexture(GL_TEXTURE0 + config->max_texture_image_units - 7);
+					glBindTexture(GL_TEXTURE_2D_ARRAY, backbuffer_depth);
+				}
+			} else {
+				glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+				glReadBuffer(GL_COLOR_ATTACHMENT0);
+				glBindFramebuffer(GL_DRAW_FRAMEBUFFER, backbuffer_fbo);
+				if (scene_state.used_screen_texture) {
+					glBlitFramebuffer(0, 0, size.x, size.y,
+							0, 0, size.x, size.y,
+							GL_COLOR_BUFFER_BIT, GL_NEAREST);
+					glActiveTexture(GL_TEXTURE0 + config->max_texture_image_units - 6);
+					glBindTexture(GL_TEXTURE_2D, backbuffer);
+				}
+				if (scene_state.used_depth_texture) {
+					glBlitFramebuffer(0, 0, size.x, size.y,
+							0, 0, size.x, size.y,
+							GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT, GL_NEAREST);
+					glActiveTexture(GL_TEXTURE0 + config->max_texture_image_units - 7);
+					glBindTexture(GL_TEXTURE_2D, backbuffer_depth);
+				}
 			}
 		}
 
