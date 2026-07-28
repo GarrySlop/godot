@@ -101,7 +101,7 @@ GLuint RenderSceneBuffersGLES3::_rt_get_cached_fbo(GLuint p_color, GLuint p_dept
 	glGenFramebuffers(1, &new_fbo.fbo);
 	glBindFramebuffer(GL_FRAMEBUFFER, new_fbo.fbo);
 
-	_rt_attach_textures(p_color, p_depth, p_samples, p_view_count, true);
+	_rt_attach_textures(p_color, p_depth, p_samples, p_view_count, GLES3::TextureStorage::get_singleton()->render_target_get_depth_has_stencil(render_target));
 
 	GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
 	if (status != GL_FRAMEBUFFER_COMPLETE) {
@@ -190,8 +190,10 @@ void RenderSceneBuffersGLES3::_check_render_buffers() {
 	ERR_FAIL_COND(view_count == 0);
 
 	bool use_internal_buffer = scaling_3d_mode != RSE::VIEWPORT_SCALING_3D_MODE_OFF || apply_environment_effects_in_post || apply_canvas_bg_exposure;
-	GLenum depth_format = GL_DEPTH24_STENCIL8;
-	uint32_t depth_format_size = 4;
+	GLenum depth_format = config->get_depth_internal_format_3d();
+	uint32_t depth_format_size = config->get_depth_format_size_3d();
+	bool depth_has_stencil = config->get_depth_has_stencil_3d();
+	GLenum depth_attachment = depth_has_stencil ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT;
 	bool use_multiview = view_count > 1;
 
 	if (!use_internal_buffer && internal3d.color != 0) {
@@ -229,9 +231,9 @@ void RenderSceneBuffersGLES3::_check_render_buffers() {
 		glBindTexture(texture_target, internal3d.depth);
 
 		if (use_multiview) {
-			glTexImage3D(texture_target, 0, depth_format, internal_size.x, internal_size.y, view_count, 0, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, nullptr);
+			glTexImage3D(texture_target, 0, depth_format, internal_size.x, internal_size.y, view_count, 0, config->get_depth_format_3d(), config->get_depth_type_3d(), nullptr);
 		} else {
-			glTexImage2D(texture_target, 0, depth_format, internal_size.x, internal_size.y, 0, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, nullptr);
+			glTexImage2D(texture_target, 0, depth_format, internal_size.x, internal_size.y, 0, config->get_depth_format_3d(), config->get_depth_type_3d(), nullptr);
 		}
 
 		glTexParameteri(texture_target, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -249,13 +251,13 @@ void RenderSceneBuffersGLES3::_check_render_buffers() {
 #ifndef IOS_ENABLED
 		if (use_multiview) {
 			glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, internal3d.color, 0, 0, view_count);
-			glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, internal3d.depth, 0, 0, view_count);
+			glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, depth_attachment, internal3d.depth, 0, 0, view_count);
 		} else {
 #else
 		{
 #endif
 			glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture_target, internal3d.color, 0);
-			glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, texture_target, internal3d.depth, 0);
+			glFramebufferTexture2D(GL_FRAMEBUFFER, depth_attachment, texture_target, internal3d.depth, 0);
 		}
 
 		GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
@@ -306,7 +308,7 @@ void RenderSceneBuffersGLES3::_check_render_buffers() {
 			glBindFramebuffer(GL_FRAMEBUFFER, msaa3d.fbo);
 
 			glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, msaa3d.color);
-			glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, msaa3d.depth);
+			glFramebufferRenderbuffer(GL_FRAMEBUFFER, depth_attachment, GL_RENDERBUFFER, msaa3d.depth);
 
 			GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
 			if (status != GL_FRAMEBUFFER_COMPLETE) {
@@ -352,7 +354,7 @@ void RenderSceneBuffersGLES3::_check_render_buffers() {
 			glBindFramebuffer(GL_FRAMEBUFFER, msaa3d.fbo);
 
 			glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, msaa3d.color, 0, 0, view_count);
-			glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, msaa3d.depth, 0, 0, view_count);
+			glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, depth_attachment, msaa3d.depth, 0, 0, view_count);
 
 			GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
 			if (status != GL_FRAMEBUFFER_COMPLETE) {
@@ -381,7 +383,7 @@ void RenderSceneBuffersGLES3::_check_render_buffers() {
 			glGenFramebuffers(1, &msaa3d.fbo);
 			glBindFramebuffer(GL_FRAMEBUFFER, msaa3d.fbo);
 
-			_rt_attach_textures(internal3d.color, internal3d.depth, msaa3d.samples, view_count, true);
+			_rt_attach_textures(internal3d.color, internal3d.depth, msaa3d.samples, view_count, depth_has_stencil);
 
 			GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
 			if (status != GL_FRAMEBUFFER_COMPLETE) {
@@ -473,8 +475,10 @@ void RenderSceneBuffersGLES3::check_backbuffer(bool p_need_color, bool p_need_de
 
 	bool use_multiview = view_count > 1 && GLES3::Config::get_singleton()->multiview_supported;
 	GLenum texture_target = use_multiview ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D;
-	GLenum depth_format = GL_DEPTH24_STENCIL8;
-	uint32_t depth_format_size = 4;
+	GLES3::Config *config = GLES3::Config::get_singleton();
+	GLenum depth_format = config->get_depth_internal_format_3d();
+	uint32_t depth_format_size = config->get_depth_format_size_3d();
+	GLenum depth_attachment = config->get_depth_has_stencil_3d() ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT;
 
 	if (backbuffer3d.color == 0 && p_need_color) {
 		glGenTextures(1, &backbuffer3d.color);
@@ -509,9 +513,9 @@ void RenderSceneBuffersGLES3::check_backbuffer(bool p_need_color, bool p_need_de
 		glBindTexture(texture_target, backbuffer3d.depth);
 
 		if (use_multiview) {
-			glTexImage3D(texture_target, 0, depth_format, internal_size.x, internal_size.y, view_count, 0, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, nullptr);
+			glTexImage3D(texture_target, 0, depth_format, internal_size.x, internal_size.y, view_count, 0, config->get_depth_format_3d(), config->get_depth_type_3d(), nullptr);
 		} else {
-			glTexImage2D(texture_target, 0, depth_format, internal_size.x, internal_size.y, 0, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, nullptr);
+			glTexImage2D(texture_target, 0, depth_format, internal_size.x, internal_size.y, 0, config->get_depth_format_3d(), config->get_depth_type_3d(), nullptr);
 		}
 
 		glTexParameteri(texture_target, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -523,12 +527,12 @@ void RenderSceneBuffersGLES3::check_backbuffer(bool p_need_color, bool p_need_de
 
 #ifndef IOS_ENABLED
 		if (use_multiview) {
-			glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, backbuffer3d.depth, 0, 0, view_count);
+			glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, depth_attachment, backbuffer3d.depth, 0, 0, view_count);
 		} else {
 #else
 		{
 #endif
-			glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, texture_target, backbuffer3d.depth, 0);
+			glFramebufferTexture2D(GL_FRAMEBUFFER, depth_attachment, texture_target, backbuffer3d.depth, 0);
 		}
 	}
 
@@ -629,11 +633,29 @@ void RenderSceneBuffersGLES3::_clear_glow_buffers() {
 	}
 }
 
+const GLuint *RenderSceneBuffersGLES3::get_scratch_fbos() {
+	if (scratch_fbos[SCRATCH_FBO_READ] == 0) {
+		glGenFramebuffers(SCRATCH_FBO_MAX, scratch_fbos);
+	}
+
+	return scratch_fbos;
+}
+
+void RenderSceneBuffersGLES3::_clear_scratch_fbos() {
+	if (scratch_fbos[SCRATCH_FBO_READ] != 0) {
+		glDeleteFramebuffers(SCRATCH_FBO_MAX, scratch_fbos);
+		for (int i = 0; i < SCRATCH_FBO_MAX; i++) {
+			scratch_fbos[i] = 0;
+		}
+	}
+}
+
 void RenderSceneBuffersGLES3::free_render_buffer_data() {
 	_clear_msaa3d_buffers();
 	_clear_intermediate_buffers();
 	_clear_back_buffers();
 	_clear_glow_buffers();
+	_clear_scratch_fbos();
 }
 
 GLuint RenderSceneBuffersGLES3::get_render_fbo() {

@@ -82,6 +82,18 @@ public:
 
 	FBDEF backbuffer3d; // our back buffer
 
+	// Scratch FBOs used by the multiview post-processing path to bind individual
+	// layers of our array textures. They hold no storage of their own, only
+	// attachments that are rebound every frame, so they are kept alive for the
+	// lifetime of the buffers rather than created and destroyed each frame.
+	enum {
+		SCRATCH_FBO_READ = 0,
+		SCRATCH_FBO_WRITE,
+		SCRATCH_FBO_POST,
+		SCRATCH_FBO_MAX,
+	};
+	GLuint scratch_fbos[SCRATCH_FBO_MAX] = { 0, 0, 0 };
+
 	// Buffers for our glow implementation
 	struct GLOW {
 		GLES3::Glow::Level levels[4];
@@ -93,6 +105,7 @@ private:
 	void _clear_intermediate_buffers();
 	void _clear_back_buffers();
 	void _clear_glow_buffers();
+	void _clear_scratch_fbos();
 
 	void _rt_attach_textures(GLuint p_color, GLuint p_depth, GLsizei p_samples, uint32_t p_view_count, bool p_depth_has_stencil);
 	GLuint _rt_get_cached_fbo(GLuint p_color, GLuint p_depth, GLsizei p_samples, uint32_t p_view_count);
@@ -144,6 +157,10 @@ public:
 		_check_render_buffers();
 		return internal3d.depth;
 	}
+	// Returns the scratch FBOs used to bind individual array texture layers,
+	// creating them on first use.
+	const GLuint *get_scratch_fbos();
+
 	GLuint get_backbuffer_fbo() const { return backbuffer3d.fbo; }
 	GLuint get_backbuffer() const { return backbuffer3d.color; }
 	GLuint get_backbuffer_depth() const { return backbuffer3d.depth; }

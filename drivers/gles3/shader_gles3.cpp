@@ -682,6 +682,9 @@ void ShaderGLES3::_save_to_cache(Version *p_version) {
 }
 
 void ShaderGLES3::_clear_version(Version *p_version) {
+	// The cache may hold a pointer into the specializations we are about to drop.
+	_invalidate_uniform_cache();
+
 	// Variants not compiled yet, just return
 	if (p_version->variants.is_empty()) {
 		return;

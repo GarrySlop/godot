@@ -176,6 +176,24 @@ private:
 	int base_texture_index = 0;
 	Version::Specialization *current_shader = nullptr;
 
+	// Uniforms are always set immediately after binding, with the same version,
+	// variant and specialization that was just bound. Remembering the last
+	// resolved specialization turns the RID_Owner lookup plus hash map probe that
+	// every single version_set_uniform() would otherwise perform into three
+	// integer compares. This matters on mobile, where a scene pass can issue ten
+	// uniform updates per draw call.
+	RID uniform_cache_version;
+	int uniform_cache_variant = -1;
+	uint64_t uniform_cache_specialization = 0;
+	Version::Specialization *uniform_cache_spec = nullptr;
+
+	_FORCE_INLINE_ void _invalidate_uniform_cache() {
+		uniform_cache_version = RID();
+		uniform_cache_variant = -1;
+		uniform_cache_specialization = 0;
+		uniform_cache_spec = nullptr;
+	}
+
 protected:
 	ShaderGLES3();
 	void _setup(const char *p_vertex_code, const char *p_fragment_code, const char *p_name, int p_uniform_count, const char **p_uniform_names, int p_ubo_count, const UBOPair *p_ubos, int p_feedback_count, const Feedback *p_feedback, int p_texture_count, const TexUnitPair *p_tex_units, int p_specialization_count, const Specialization *p_specializations, int p_variant_count, const char **p_variants);
@@ -213,21 +231,38 @@ protected:
 
 		if (!spec || !spec->ok) {
 			WARN_PRINT_ONCE("shader failed to compile, unable to bind shader.");
+			_invalidate_uniform_cache();
 			return false;
 		}
 
 		glUseProgram(spec->id);
 		current_shader = spec;
+
+		// Prime the lookup cache for the uniform updates that follow this bind.
+		uniform_cache_version = p_version;
+		uniform_cache_variant = p_variant;
+		uniform_cache_specialization = p_specialization;
+		uniform_cache_spec = spec;
 		return true;
 	}
 
 	_FORCE_INLINE_ int _version_get_uniform(int p_which, RID p_version, int p_variant, uint64_t p_specialization) {
 		ERR_FAIL_INDEX_V(p_which, uniform_count, -1);
-		Version *version = version_owner.get_or_null(p_version);
-		ERR_FAIL_NULL_V(version, -1);
-		ERR_FAIL_INDEX_V(p_variant, int(version->variants.size()), -1);
-		Version::Specialization *spec = version->variants[p_variant].getptr(p_specialization);
-		ERR_FAIL_NULL_V(spec, -1);
+
+		Version::Specialization *spec = uniform_cache_spec;
+		if (spec == nullptr || p_variant != uniform_cache_variant || p_specialization != uniform_cache_specialization || p_version != uniform_cache_version) {
+			Version *version = version_owner.get_or_null(p_version);
+			ERR_FAIL_NULL_V(version, -1);
+			ERR_FAIL_INDEX_V(p_variant, int(version->variants.size()), -1);
+			spec = version->variants[p_variant].getptr(p_specialization);
+			ERR_FAIL_NULL_V(spec, -1);
+
+			uniform_cache_version = p_version;
+			uniform_cache_variant = p_variant;
+			uniform_cache_specialization = p_specialization;
+			uniform_cache_spec = spec;
+		}
+
 		ERR_FAIL_INDEX_V(p_which, int(spec->uniform_location.size()), -1);
 		return spec->uniform_location[p_which];
 	}

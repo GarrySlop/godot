@@ -101,6 +101,29 @@ public:
 	bool multiview_supported = false;
 	bool external_texture_supported = false;
 	bool copy_image_supported = false;
+	bool framebuffer_invalidate_supported = false;
+
+	// When set, 3D depth buffers are allocated as GL_DEPTH_COMPONENT16 instead of
+	// GL_DEPTH24_STENCIL8. This halves the depth tile-memory footprint, which lets
+	// a tiled GPU fit more pixels into each tile and so run fewer binning passes.
+	// The trade-off is depth precision and the loss of 3D stencil support.
+	bool use_16_bits_depth_3d = false;
+
+	_FORCE_INLINE_ GLenum get_depth_internal_format_3d() const {
+		return use_16_bits_depth_3d ? GL_DEPTH_COMPONENT16 : GL_DEPTH24_STENCIL8;
+	}
+	_FORCE_INLINE_ GLenum get_depth_format_3d() const {
+		return use_16_bits_depth_3d ? GL_DEPTH_COMPONENT : GL_DEPTH_STENCIL;
+	}
+	_FORCE_INLINE_ GLenum get_depth_type_3d() const {
+		return use_16_bits_depth_3d ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT_24_8;
+	}
+	_FORCE_INLINE_ uint32_t get_depth_format_size_3d() const {
+		return use_16_bits_depth_3d ? 2 : 4;
+	}
+	_FORCE_INLINE_ bool get_depth_has_stencil_3d() const {
+		return !use_16_bits_depth_3d;
+	}
 
 	// Adreno 3XX compatibility.
 	bool disable_particles_workaround = false; // Set to 'true' to disable 'GPUParticles'.
