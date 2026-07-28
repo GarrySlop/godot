@@ -54,6 +54,55 @@
 
 RasterizerSceneGLES3 *RasterizerSceneGLES3::singleton = nullptr;
 
+// Tell the driver that the depth/stencil contents of a framebuffer are dead, so
+// a tiled GPU can drop them instead of writing the tile buffer back out to
+// memory. Must be called while the framebuffer is still bound and before the
+// next framebuffer switch, otherwise the store has already been scheduled.
+static void _invalidate_depth_stencil(GLuint p_fbo) {
+	if (p_fbo == 0 || !GLES3::Config::get_singleton()->framebuffer_invalidate_supported) {
+		// Attachment names differ for the default framebuffer, and it is never a
+		// buffer we own, so leave it alone.
+		return;
+	}
+
+	const GLenum attachments[2] = { GL_DEPTH_ATTACHMENT, GL_STENCIL_ATTACHMENT };
+
+	GLint prev_fbo = 0;
+	glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+	if (GLuint(prev_fbo) != p_fbo) {
+		glBindFramebuffer(GL_FRAMEBUFFER, p_fbo);
+	}
+
+	glInvalidateFramebuffer(GL_FRAMEBUFFER, 2, attachments);
+
+	if (GLuint(prev_fbo) != p_fbo) {
+		glBindFramebuffer(GL_FRAMEBUFFER, GLuint(prev_fbo));
+	}
+}
+
+// Attachment point for our own 3D depth buffers, which only carry stencil when
+// the configured depth format has it.
+static GLenum _depth_attachment() {
+	return GLES3::Config::get_singleton()->get_depth_has_stencil_3d() ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT;
+}
+
+// Blit mask for copying depth between our own 3D buffers. The stencil bit is
+// only meaningful when the configured 3D depth format actually carries stencil.
+static GLbitfield _depth_blit_mask() {
+	return GLES3::Config::get_singleton()->get_depth_has_stencil_3d() ? (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT) : GL_DEPTH_BUFFER_BIT;
+}
+
+// Nothing in this renderer samples the render target's depth attachment. The
+// only consumer is an XR runtime we hand a depth swapchain to, which shows up
+// here as the render target's depth being overridden.
+static bool _render_target_depth_is_consumed(RID p_render_target) {
+	if (p_render_target.is_null()) {
+		return false;
+	}
+
+	return GLES3::TextureStorage::get_singleton()->render_target_get_override_depth(p_render_target).is_valid();
+}
+
 RenderGeometryInstance *RasterizerSceneGLES3::geometry_instance_create(RID p_base) {
 	RSE::InstanceType type = RSG::utilities->get_base_type(p_base);
 	ERR_FAIL_COND_V(!((1 << type) & RSE::INSTANCE_GEOMETRY_MASK), nullptr);
@@ -2951,11 +3000,11 @@ void RasterizerSceneGLES3::render_scene(const Ref<RenderSceneBuffers> &p_render_
 									GL_COLOR_BUFFER_BIT, GL_NEAREST);
 						}
 						if (copy_depth) {
-							glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, src_depth, 0, v);
-							glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, backbuffer_depth, 0, v);
+							glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, _depth_attachment(), src_depth, 0, v);
+							glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, _depth_attachment(), backbuffer_depth, 0, v);
 							glBlitFramebuffer(0, 0, size.x, size.y,
 									0, 0, size.x, size.y,
-									GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT, GL_NEAREST);
+									_depth_blit_mask(), GL_NEAREST);
 						}
 					}
 
@@ -2984,7 +3033,7 @@ void RasterizerSceneGLES3::render_scene(const Ref<RenderSceneBuffers> &p_render_
 				if (scene_state.used_depth_texture) {
 					glBlitFramebuffer(0, 0, size.x, size.y,
 							0, 0, size.x, size.y,
-							GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT, GL_NEAREST);
+							_depth_blit_mask(), GL_NEAREST);
 					glActiveTexture(GL_TEXTURE0 + config->max_texture_image_units - 7);
 					glBindTexture(GL_TEXTURE_2D, backbuffer_depth);
 				}
@@ -3017,6 +3066,24 @@ void RasterizerSceneGLES3::render_scene(const Ref<RenderSceneBuffers> &p_render_
 	// Reset stuff that may trip up the next process.
 	scene_state.reset_gl_state();
 	glUseProgram(0);
+
+	// We are done rendering into `fbo`. Discard its depth/stencil where nothing
+	// downstream reads it, so a tiled GPU can drop the depth tile buffer instead
+	// of writing it back to memory. At the internal size used for stereo on a
+	// standalone headset that store is tens of megabytes per frame of pure waste.
+	//
+	// The internal and MSAA buffers are consumed by _render_post_processing(),
+	// which invalidates them once it is genuinely finished with them.
+	if (is_reflection_probe) {
+		// A probe face is only ever read back as colour.
+		_invalidate_depth_stencil(fbo);
+	} else if (rb.is_valid() && fbo == texture_storage->render_target_get_fbo(rb->render_target)) {
+		// Rendered straight into the render target, so no post-processing pass is
+		// going to touch this depth.
+		if (!ssao_enabled && !_render_target_depth_is_consumed(rb->render_target)) {
+			_invalidate_depth_stencil(fbo);
+		}
+	}
 
 	if (!is_reflection_probe) {
 		_render_post_processing(&render_data);
@@ -3155,17 +3222,24 @@ void RasterizerSceneGLES3::_render_post_processing(const RenderDataGLES3 *p_rend
 					internal_size, p_render_data->luminance_multiplier, glow_buffers, glow_intensity,
 					srgb_white, 0, false, bcs_spec_constants, p_render_data->render_buffers->scaling_3d_mode != RSE::VIEWPORT_SCALING_3D_MODE_NEAREST);
 
-			// Copy depth buffer
-			glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo_int);
-			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo_rt);
-			glBlitFramebuffer(0, 0, internal_size.x, internal_size.y, 0, 0, target_size.x, target_size.y, GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT, GL_NEAREST);
+			// Copy depth buffer, but only if an XR runtime is going to read it back
+			// out of the render target. See the multiview branch below.
+			if (_render_target_depth_is_consumed(render_target)) {
+				glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo_int);
+				glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo_rt);
+				glBlitFramebuffer(0, 0, internal_size.x, internal_size.y, 0, 0, target_size.x, target_size.y, _depth_blit_mask(), GL_NEAREST);
+			}
+
+			// The internal depth buffer has served its purpose for this frame.
+			_invalidate_depth_stencil(fbo_int);
 		}
 
 		glBindFramebuffer(GL_FRAMEBUFFER, fbo_rt);
 	} else if ((fbo_msaa_3d != 0 && msaa3d_needs_resolve) || (fbo_int != 0)) {
-		// TODO investigate if it's smarter to cache these FBOs
-		GLuint fbos[3]; // read, write and post
-		glGenFramebuffers(3, fbos);
+		// Scratch FBOs (read, write and post) are kept alive between frames, only
+		// their attachments change. Recreating them every frame is a measurable
+		// cost on mobile drivers.
+		const GLuint *fbos = rb->get_scratch_fbos();
 
 		// Resolve if needed.
 		if (fbo_msaa_3d != 0 && msaa3d_needs_resolve) {
@@ -3187,10 +3261,10 @@ void RasterizerSceneGLES3::_render_post_processing(const RenderDataGLES3 *p_rend
 
 			for (uint32_t v = 0; v < view_count; v++) {
 				glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, read_color, 0, v);
-				glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, read_depth, 0, v);
+				glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, _depth_attachment(), read_depth, 0, v);
 				glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, write_color, 0, v);
-				glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, write_depth, 0, v);
-				glBlitFramebuffer(0, 0, internal_size.x, internal_size.y, 0, 0, internal_size.x, internal_size.y, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT, GL_NEAREST);
+				glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, _depth_attachment(), write_depth, 0, v);
+				glBlitFramebuffer(0, 0, internal_size.x, internal_size.y, 0, 0, internal_size.x, internal_size.y, GL_COLOR_BUFFER_BIT | _depth_blit_mask(), GL_NEAREST);
 			}
 		}
 
@@ -3230,22 +3304,31 @@ void RasterizerSceneGLES3::_render_post_processing(const RenderDataGLES3 *p_rend
 						srgb_white, v, true, bcs_spec_constants, p_render_data->render_buffers->scaling_3d_mode != RSE::VIEWPORT_SCALING_3D_MODE_NEAREST);
 			}
 
-			// Copy depth
-			GLuint write_depth = texture_storage->render_target_get_depth(render_target);
+			// Copy depth, but only when something downstream can actually read it.
+			// Nothing in the Compatibility renderer samples the render target's
+			// depth after this point, so the only consumer is an XR runtime that we
+			// submit a depth swapchain to. Skipping the blit otherwise saves a
+			// full-resolution depth read and write per view, which on a tiled mobile
+			// GPU is the single most expensive thing in this function.
+			if (_render_target_depth_is_consumed(render_target)) {
+				GLuint write_depth = texture_storage->render_target_get_depth(render_target);
 
-			glBindFramebuffer(GL_READ_FRAMEBUFFER, fbos[0]);
-			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbos[1]);
+				glBindFramebuffer(GL_READ_FRAMEBUFFER, fbos[0]);
+				glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbos[1]);
 
-			for (uint32_t v = 0; v < view_count; v++) {
-				glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, read_depth, 0, v);
-				glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, write_depth, 0, v);
+				for (uint32_t v = 0; v < view_count; v++) {
+					glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, _depth_attachment(), read_depth, 0, v);
+					glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, _depth_attachment(), write_depth, 0, v);
 
-				glBlitFramebuffer(0, 0, internal_size.x, internal_size.y, 0, 0, target_size.x, target_size.y, GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT, GL_NEAREST);
+					glBlitFramebuffer(0, 0, internal_size.x, internal_size.y, 0, 0, target_size.x, target_size.y, _depth_blit_mask(), GL_NEAREST);
+				}
 			}
+
+			// The internal depth buffer has served its purpose for this frame.
+			_invalidate_depth_stencil(fbo_int);
 		}
 
 		glBindFramebuffer(GL_FRAMEBUFFER, fbo_rt);
-		glDeleteFramebuffers(3, fbos);
 	}
 
 	glActiveTexture(GL_TEXTURE2);

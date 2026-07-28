@@ -2631,10 +2631,14 @@ void TextureStorage::_update_render_target_color(RenderTarget *rt) {
 			glGenTextures(1, &rt->depth);
 			glBindTexture(texture_target, rt->depth);
 
+			GLenum depth_internal_format = config->get_depth_internal_format_3d();
+			GLenum depth_format = config->get_depth_format_3d();
+			GLenum depth_type = config->get_depth_type_3d();
+
 			if (use_multiview) {
-				glTexImage3D(texture_target, 0, GL_DEPTH24_STENCIL8, rt->size.x, rt->size.y, rt->view_count, 0, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, nullptr);
+				glTexImage3D(texture_target, 0, depth_internal_format, rt->size.x, rt->size.y, rt->view_count, 0, depth_format, depth_type, nullptr);
 			} else {
-				glTexImage2D(texture_target, 0, GL_DEPTH24_STENCIL8, rt->size.x, rt->size.y, 0, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, nullptr);
+				glTexImage2D(texture_target, 0, depth_internal_format, rt->size.x, rt->size.y, 0, depth_format, depth_type, nullptr);
 			}
 
 			glTexParameteri(texture_target, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -2642,9 +2646,9 @@ void TextureStorage::_update_render_target_color(RenderTarget *rt) {
 			glTexParameteri(texture_target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 			glTexParameteri(texture_target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-			rt->depth_has_stencil = true;
+			rt->depth_has_stencil = config->get_depth_has_stencil_3d();
 
-			GLES3::Utilities::get_singleton()->texture_allocated_data(rt->depth, rt->size.x * rt->size.y * rt->view_count * 4, "Render target depth texture");
+			GLES3::Utilities::get_singleton()->texture_allocated_data(rt->depth, rt->size.x * rt->size.y * rt->view_count * config->get_depth_format_size_3d(), "Render target depth texture");
 		}
 
 #ifndef IOS_ENABLED

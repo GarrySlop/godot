@@ -218,9 +218,21 @@ Config::Config() {
 	}
 #endif
 
+	// glInvalidateFramebuffer is core in GLES 3.0, but on desktop GL it only
+	// arrived in 4.3 and Godot requests a 3.3 context. Reporting the extension is
+	// not enough: our glad loader only resolves this entry point for GLES 3.0, so
+	// on a desktop GL context the pointer stays null and calling it would crash.
+	// Test the pointer itself wherever we go through glad.
+	framebuffer_invalidate_supported = !RasterizerUtilGLES3::is_gles_over_gl();
+#ifdef GLAD_ENABLED
+	framebuffer_invalidate_supported = framebuffer_invalidate_supported && (glInvalidateFramebuffer != nullptr);
+#endif
+
 	force_vertex_shading = GLOBAL_GET("rendering/shading/overrides/force_vertex_shading");
 	specular_occlusion = GLOBAL_GET("rendering/reflections/specular_occlusion/enabled");
 	use_nearest_mip_filter = GLOBAL_GET("rendering/textures/default_filters/use_nearest_mipmap_filter");
+
+	use_16_bits_depth_3d = bool(GLOBAL_GET("rendering/driver/depth_buffer/use_16_bits_3d"));
 
 	use_depth_prepass = bool(GLOBAL_GET("rendering/driver/depth_prepass/enable"));
 	if (use_depth_prepass) {
