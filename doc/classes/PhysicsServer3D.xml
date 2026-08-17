@@ -1041,6 +1041,221 @@
 				Sets a pin joint parameter.
 			</description>
 		</method>
+		<method name="rope_add_collision_exception">
+			<return type="void" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="body" type="RID" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_apply_central_impulse">
+			<return type="void" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="impulse" type="Vector3" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_apply_point_impulse">
+			<return type="void" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="point_index" type="int" />
+			<param index="2" name="impulse" type="Vector3" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_attach_point_to_body">
+			<return type="void" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="point_index" type="int" />
+			<param index="2" name="body" type="RID" />
+			<param index="3" name="local_offset" type="Vector3" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_create">
+			<return type="RID" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_detach_point">
+			<return type="void" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="point_index" type="int" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_get_bounds" qualifiers="const">
+			<return type="AABB" />
+			<param index="0" name="rope" type="RID" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_get_collision_layer" qualifiers="const">
+			<return type="int" />
+			<param index="0" name="rope" type="RID" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_get_collision_mask" qualifiers="const">
+			<return type="int" />
+			<param index="0" name="rope" type="RID" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_get_flag" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="flag" type="int" enum="PhysicsServer3D.RopeFlag" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_get_param" qualifiers="const">
+			<return type="float" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="param" type="int" enum="PhysicsServer3D.RopeParameter" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_get_pin_position" qualifiers="const">
+			<return type="Vector3" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="point_index" type="int" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_get_point_count" qualifiers="const">
+			<return type="int" />
+			<param index="0" name="rope" type="RID" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_get_point_position" qualifiers="const">
+			<return type="Vector3" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="point_index" type="int" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_get_point_velocity" qualifiers="const">
+			<return type="Vector3" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="point_index" type="int" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_get_points" qualifiers="const">
+			<return type="PackedVector3Array" />
+			<param index="0" name="rope" type="RID" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_get_simulation_substeps" qualifiers="const">
+			<return type="int" />
+			<param index="0" name="rope" type="RID" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_get_space" qualifiers="const">
+			<return type="RID" />
+			<param index="0" name="rope" type="RID" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_is_point_pinned" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="point_index" type="int" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_pin_point">
+			<return type="void" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="point_index" type="int" />
+			<param index="2" name="pin" type="bool" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_remove_all_attachments">
+			<return type="void" />
+			<param index="0" name="rope" type="RID" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_remove_collision_exception">
+			<return type="void" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="body" type="RID" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_set_collision_layer">
+			<return type="void" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="layer" type="int" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_set_collision_mask">
+			<return type="void" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="mask" type="int" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_set_flag">
+			<return type="void" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="flag" type="int" enum="PhysicsServer3D.RopeFlag" />
+			<param index="2" name="enabled" type="bool" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_set_param">
+			<return type="void" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="param" type="int" enum="PhysicsServer3D.RopeParameter" />
+			<param index="2" name="value" type="float" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_set_pin_position">
+			<return type="void" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="point_index" type="int" />
+			<param index="2" name="position" type="Vector3" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_set_point_position">
+			<return type="void" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="point_index" type="int" />
+			<param index="2" name="position" type="Vector3" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_set_points">
+			<return type="void" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="points" type="PackedVector3Array" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_set_simulation_substeps">
+			<return type="void" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="substeps" type="int" />
+			<description>
+			</description>
+		</method>
+		<method name="rope_set_space">
+			<return type="void" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="space" type="RID" />
+			<description>
+			</description>
+		</method>
 		<method name="separation_ray_shape_create">
 			<return type="RID" />
 			<description>
@@ -1501,6 +1716,36 @@
 		</method>
 	</methods>
 	<constants>
+		<constant name="ROPE_PARAM_RADIUS" value="0" enum="RopeParameter">
+		</constant>
+		<constant name="ROPE_PARAM_TOTAL_MASS" value="1" enum="RopeParameter">
+		</constant>
+		<constant name="ROPE_PARAM_STRETCH_COMPLIANCE" value="2" enum="RopeParameter">
+		</constant>
+		<constant name="ROPE_PARAM_BEND_COMPLIANCE" value="3" enum="RopeParameter">
+		</constant>
+		<constant name="ROPE_PARAM_LINEAR_DAMPING" value="4" enum="RopeParameter">
+		</constant>
+		<constant name="ROPE_PARAM_DRAG" value="5" enum="RopeParameter">
+		</constant>
+		<constant name="ROPE_PARAM_GRAVITY_SCALE" value="6" enum="RopeParameter">
+		</constant>
+		<constant name="ROPE_PARAM_FRICTION" value="7" enum="RopeParameter">
+		</constant>
+		<constant name="ROPE_PARAM_RESTITUTION" value="8" enum="RopeParameter">
+		</constant>
+		<constant name="ROPE_PARAM_MAX_REACTION_IMPULSE" value="9" enum="RopeParameter">
+		</constant>
+		<constant name="ROPE_PARAM_MAX" value="10" enum="RopeParameter">
+		</constant>
+		<constant name="ROPE_FLAG_INEXTENSIBLE" value="0" enum="RopeFlag">
+		</constant>
+		<constant name="ROPE_FLAG_TWO_WAY_COUPLING" value="1" enum="RopeFlag">
+		</constant>
+		<constant name="ROPE_FLAG_COLLISION_ENABLED" value="2" enum="RopeFlag">
+		</constant>
+		<constant name="ROPE_FLAG_MAX" value="3" enum="RopeFlag">
+		</constant>
 		<constant name="JOINT_TYPE_PIN" value="0" enum="JointType">
 			The [Joint3D] is a [PinJoint3D].
 		</constant>

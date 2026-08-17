@@ -355,6 +355,8 @@
 #include "scene/3d/physics/ray_cast_3d.h"
 #include "scene/3d/physics/rigid_body_3d.h"
 #include "scene/3d/physics/shape_cast_3d.h"
+#include "scene/3d/physics/rope_attachment_3d.h"
+#include "scene/3d/physics/rope_body_3d.h"
 #include "scene/3d/physics/soft_body_3d.h"
 #include "scene/3d/physics/spring_arm_3d.h"
 #include "scene/3d/physics/static_body_3d.h"
@@ -725,6 +727,8 @@ void register_scene_types() {
 	GDREGISTER_CLASS(PhysicalBoneSimulator3D);
 	GDREGISTER_CLASS(PhysicalBone3D);
 	GDREGISTER_CLASS(SoftBody3D);
+	GDREGISTER_CLASS(RopeBody3D);
+	GDREGISTER_CLASS(RopeAttachment3D);
 #endif // PHYSICS_3D_DISABLED
 
 	GDREGISTER_CLASS(BoneAttachment3D);

@@ -635,6 +635,86 @@ public:
 	virtual void soft_body_pin_point(RID p_body, int p_point_index, bool p_pin) = 0;
 	virtual bool soft_body_is_point_pinned(RID p_body, int p_point_index) const = 0;
 
+	/* ROPE API */
+
+	// NOTE: Unlike the rest of this class, the rope methods are not pure virtual. Ropes are only
+	// implemented by the Jolt Physics backend; every other backend inherits these no-op defaults
+	// rather than carrying several hundred lines of "not supported" stubs. `RopeBody3D` reports an
+	// unsupported backend once, through `get_configuration_warnings()`.
+
+	enum RopeParameter {
+		ROPE_PARAM_RADIUS,
+		ROPE_PARAM_TOTAL_MASS,
+		ROPE_PARAM_STRETCH_COMPLIANCE,
+		ROPE_PARAM_BEND_COMPLIANCE,
+		ROPE_PARAM_LINEAR_DAMPING,
+		ROPE_PARAM_DRAG,
+		ROPE_PARAM_GRAVITY_SCALE,
+		ROPE_PARAM_FRICTION,
+		ROPE_PARAM_RESTITUTION,
+		ROPE_PARAM_MAX_REACTION_IMPULSE,
+		// Total rest length of the rope. Zero means "derive it from the spacing of the points that
+		// were handed to `rope_set_points()`", which is the behaviour when no length is requested.
+		ROPE_PARAM_LENGTH,
+		ROPE_PARAM_MAX,
+	};
+
+	enum RopeFlag {
+		ROPE_FLAG_INEXTENSIBLE,
+		ROPE_FLAG_TWO_WAY_COUPLING,
+		ROPE_FLAG_COLLISION_ENABLED,
+		ROPE_FLAG_MAX,
+	};
+
+	virtual RID rope_create() { return RID(); }
+
+	virtual void rope_set_space(RID p_rope, RID p_space) {}
+	virtual RID rope_get_space(RID p_rope) const { return RID(); }
+
+	virtual void rope_set_points(RID p_rope, const Vector<Vector3> &p_points) {}
+	virtual Vector<Vector3> rope_get_points(RID p_rope) const { return Vector<Vector3>(); }
+	virtual int rope_get_point_count(RID p_rope) const { return 0; }
+
+	virtual Vector3 rope_get_point_position(RID p_rope, int p_point_index) const { return Vector3(); }
+	virtual void rope_set_point_position(RID p_rope, int p_point_index, const Vector3 &p_position) {}
+	virtual Vector3 rope_get_point_velocity(RID p_rope, int p_point_index) const { return Vector3(); }
+
+	virtual void rope_set_param(RID p_rope, RopeParameter p_param, float p_value) {}
+	virtual float rope_get_param(RID p_rope, RopeParameter p_param) const { return 0.0f; }
+
+	virtual void rope_set_flag(RID p_rope, RopeFlag p_flag, bool p_enabled) {}
+	virtual bool rope_get_flag(RID p_rope, RopeFlag p_flag) const { return false; }
+
+	virtual void rope_set_simulation_substeps(RID p_rope, int p_substeps) {}
+	virtual int rope_get_simulation_substeps(RID p_rope) const { return 0; }
+
+	virtual void rope_set_collision_layer(RID p_rope, uint32_t p_layer) {}
+	virtual uint32_t rope_get_collision_layer(RID p_rope) const { return 0; }
+
+	virtual void rope_set_collision_mask(RID p_rope, uint32_t p_mask) {}
+	virtual uint32_t rope_get_collision_mask(RID p_rope) const { return 0; }
+
+	virtual void rope_add_collision_exception(RID p_rope, RID p_body) {}
+	virtual void rope_remove_collision_exception(RID p_rope, RID p_body) {}
+	virtual void rope_get_collision_exceptions(RID p_rope, List<RID> *p_exceptions) {}
+
+	virtual void rope_pin_point(RID p_rope, int p_point_index, bool p_pin) {}
+	virtual bool rope_is_point_pinned(RID p_rope, int p_point_index) const { return false; }
+
+	// Moves an existing pin's target. Unlike `rope_set_point_position` this does not teleport the
+	// particle or discard its velocity, so it is what a pin following a `Node3D` should use.
+	virtual void rope_set_pin_position(RID p_rope, int p_point_index, const Vector3 &p_position) {}
+	virtual Vector3 rope_get_pin_position(RID p_rope, int p_point_index) const { return Vector3(); }
+
+	virtual void rope_attach_point_to_body(RID p_rope, int p_point_index, RID p_body, const Vector3 &p_local_offset) {}
+	virtual void rope_detach_point(RID p_rope, int p_point_index) {}
+	virtual void rope_remove_all_attachments(RID p_rope) {}
+
+	virtual void rope_apply_point_impulse(RID p_rope, int p_point_index, const Vector3 &p_impulse) {}
+	virtual void rope_apply_central_impulse(RID p_rope, const Vector3 &p_impulse) {}
+
+	virtual AABB rope_get_bounds(RID p_rope) const { return AABB(); }
+
 	/* JOINT API */
 
 	enum JointType {
@@ -1076,6 +1156,8 @@ VARIANT_ENUM_CAST(PhysicsServer3D::BodyParameter);
 VARIANT_ENUM_CAST(PhysicsServer3D::BodyDampMode);
 VARIANT_ENUM_CAST(PhysicsServer3D::BodyState);
 VARIANT_ENUM_CAST(PhysicsServer3D::BodyAxis);
+VARIANT_ENUM_CAST(PhysicsServer3D::RopeParameter);
+VARIANT_ENUM_CAST(PhysicsServer3D::RopeFlag);
 VARIANT_ENUM_CAST(PhysicsServer3D::PinJointParam);
 VARIANT_ENUM_CAST(PhysicsServer3D::JointType);
 VARIANT_ENUM_CAST(PhysicsServer3D::HingeJointParam);

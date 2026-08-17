@@ -36,6 +36,7 @@
 #include "../misc/jolt_stream_wrappers.h"
 #include "../objects/jolt_area_3d.h"
 #include "../objects/jolt_body_3d.h"
+#include "../objects/jolt_rope_3d.h"
 #include "../shapes/jolt_shape_3d.h"
 #include "jolt_body_activation_listener_3d.h"
 #include "jolt_contact_listener_3d.h"
@@ -106,6 +107,14 @@ void JoltSpace3D::_post_step(float p_step) {
 		JoltShapedObject3D *object = shapes_changed_list.first()->self();
 		shapes_changed_list.remove(shapes_changed_list.first());
 		object->clear_previous_shape();
+	}
+
+	// Ropes are stepped after Jolt's own update so they read fresh body transforms; an attachment
+	// therefore tracks its body exactly rather than trailing it by a frame. Reaction impulses are
+	// applied to bodies here and consumed by the next update, which is a latency users cannot see
+	// but keeps the rope out of Jolt's solver entirely.
+	for (SelfList<JoltRope3D> *element = rope_list.first(); element != nullptr; element = element->next()) {
+		element->self()->step(p_step);
 	}
 }
 
@@ -533,6 +542,18 @@ void JoltSpace3D::enqueue_needs_optimization(SelfList<JoltShapedObject3D> *p_obj
 void JoltSpace3D::dequeue_needs_optimization(SelfList<JoltShapedObject3D> *p_object) {
 	if (p_object->in_list()) {
 		needs_optimization_list.remove(p_object);
+	}
+}
+
+void JoltSpace3D::enqueue_rope(SelfList<JoltRope3D> *p_rope) {
+	if (!p_rope->in_list()) {
+		rope_list.add(p_rope);
+	}
+}
+
+void JoltSpace3D::dequeue_rope(SelfList<JoltRope3D> *p_rope) {
+	if (p_rope->in_list()) {
+		rope_list.remove(p_rope);
 	}
 }
 

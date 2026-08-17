@@ -37,6 +37,7 @@ class JoltArea3D;
 class JoltBody3D;
 class JoltJobSystem;
 class JoltJoint3D;
+class JoltRope3D;
 class JoltShape3D;
 class JoltSoftBody3D;
 class JoltSpace3D;
@@ -51,6 +52,9 @@ class JoltPhysicsServer3D final : public PhysicsServer3D {
 	mutable RID_PtrOwner<JoltArea3D, true> area_owner;
 	mutable RID_PtrOwner<JoltBody3D, true> body_owner{ 65536, 1048576 };
 	mutable RID_PtrOwner<JoltSoftBody3D, true> soft_body_owner;
+	mutable RID_PtrOwner<JoltRope3D, true> rope_owner;
+	// Mirrors `rope_owner` so body teardown can clear rope attachments without an owner-wide scan.
+	HashSet<JoltRope3D *> ropes;
 	mutable RID_PtrOwner<JoltShape3D, true> shape_owner;
 	mutable RID_PtrOwner<JoltJoint3D, true> joint_owner;
 
@@ -363,6 +367,53 @@ public:
 	virtual void soft_body_pin_point(RID p_body, int p_point_index, bool p_pin) override;
 	virtual bool soft_body_is_point_pinned(RID p_body, int p_point_index) const override;
 
+	virtual RID rope_create() override;
+
+	virtual void rope_set_space(RID p_rope, RID p_space) override;
+	virtual RID rope_get_space(RID p_rope) const override;
+
+	virtual void rope_set_points(RID p_rope, const Vector<Vector3> &p_points) override;
+	virtual Vector<Vector3> rope_get_points(RID p_rope) const override;
+	virtual int rope_get_point_count(RID p_rope) const override;
+
+	virtual Vector3 rope_get_point_position(RID p_rope, int p_point_index) const override;
+	virtual void rope_set_point_position(RID p_rope, int p_point_index, const Vector3 &p_position) override;
+	virtual Vector3 rope_get_point_velocity(RID p_rope, int p_point_index) const override;
+
+	virtual void rope_set_param(RID p_rope, RopeParameter p_param, float p_value) override;
+	virtual float rope_get_param(RID p_rope, RopeParameter p_param) const override;
+
+	virtual void rope_set_flag(RID p_rope, RopeFlag p_flag, bool p_enabled) override;
+	virtual bool rope_get_flag(RID p_rope, RopeFlag p_flag) const override;
+
+	virtual void rope_set_simulation_substeps(RID p_rope, int p_substeps) override;
+	virtual int rope_get_simulation_substeps(RID p_rope) const override;
+
+	virtual void rope_set_collision_layer(RID p_rope, uint32_t p_layer) override;
+	virtual uint32_t rope_get_collision_layer(RID p_rope) const override;
+
+	virtual void rope_set_collision_mask(RID p_rope, uint32_t p_mask) override;
+	virtual uint32_t rope_get_collision_mask(RID p_rope) const override;
+
+	virtual void rope_add_collision_exception(RID p_rope, RID p_body) override;
+	virtual void rope_remove_collision_exception(RID p_rope, RID p_body) override;
+	virtual void rope_get_collision_exceptions(RID p_rope, List<RID> *p_exceptions) override;
+
+	virtual void rope_pin_point(RID p_rope, int p_point_index, bool p_pin) override;
+	virtual bool rope_is_point_pinned(RID p_rope, int p_point_index) const override;
+
+	virtual void rope_set_pin_position(RID p_rope, int p_point_index, const Vector3 &p_position) override;
+	virtual Vector3 rope_get_pin_position(RID p_rope, int p_point_index) const override;
+
+	virtual void rope_attach_point_to_body(RID p_rope, int p_point_index, RID p_body, const Vector3 &p_local_offset) override;
+	virtual void rope_detach_point(RID p_rope, int p_point_index) override;
+	virtual void rope_remove_all_attachments(RID p_rope) override;
+
+	virtual void rope_apply_point_impulse(RID p_rope, int p_point_index, const Vector3 &p_impulse) override;
+	virtual void rope_apply_central_impulse(RID p_rope, const Vector3 &p_impulse) override;
+
+	virtual AABB rope_get_bounds(RID p_rope) const override;
+
 	virtual RID joint_create() override;
 	virtual void joint_clear(RID p_joint) override;
 
@@ -451,6 +502,7 @@ public:
 	void free_area(JoltArea3D *p_area);
 	void free_body(JoltBody3D *p_body);
 	void free_soft_body(JoltSoftBody3D *p_body);
+	void free_rope(JoltRope3D *p_rope);
 	void free_shape(JoltShape3D *p_shape);
 	void free_joint(JoltJoint3D *p_joint);
 

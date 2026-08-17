@@ -339,6 +339,55 @@ public:
 	FUNC3(soft_body_pin_point, RID, int, bool);
 	FUNC2RC(bool, soft_body_is_point_pinned, RID, int);
 
+	/* ROPE API */
+
+	FUNCRID(rope)
+
+	FUNC2(rope_set_space, RID, RID)
+	FUNC1RC(RID, rope_get_space, RID)
+
+	FUNC2(rope_set_points, RID, const Vector<Vector3> &)
+	FUNC1RC(Vector<Vector3>, rope_get_points, RID)
+	FUNC1RC(int, rope_get_point_count, RID)
+
+	FUNC2RC(Vector3, rope_get_point_position, RID, int)
+	FUNC3(rope_set_point_position, RID, int, const Vector3 &)
+	FUNC2RC(Vector3, rope_get_point_velocity, RID, int)
+
+	FUNC3(rope_set_param, RID, RopeParameter, float)
+	FUNC2RC(float, rope_get_param, RID, RopeParameter)
+
+	FUNC3(rope_set_flag, RID, RopeFlag, bool)
+	FUNC2RC(bool, rope_get_flag, RID, RopeFlag)
+
+	FUNC2(rope_set_simulation_substeps, RID, int)
+	FUNC1RC(int, rope_get_simulation_substeps, RID)
+
+	FUNC2(rope_set_collision_layer, RID, uint32_t)
+	FUNC1RC(uint32_t, rope_get_collision_layer, RID)
+
+	FUNC2(rope_set_collision_mask, RID, uint32_t)
+	FUNC1RC(uint32_t, rope_get_collision_mask, RID)
+
+	FUNC2(rope_add_collision_exception, RID, RID)
+	FUNC2(rope_remove_collision_exception, RID, RID)
+	FUNC2S(rope_get_collision_exceptions, RID, List<RID> *)
+
+	FUNC3(rope_pin_point, RID, int, bool)
+	FUNC2RC(bool, rope_is_point_pinned, RID, int)
+
+	FUNC3(rope_set_pin_position, RID, int, const Vector3 &)
+	FUNC2RC(Vector3, rope_get_pin_position, RID, int)
+
+	FUNC4(rope_attach_point_to_body, RID, int, RID, const Vector3 &)
+	FUNC2(rope_detach_point, RID, int)
+	FUNC1(rope_remove_all_attachments, RID)
+
+	FUNC3(rope_apply_point_impulse, RID, int, const Vector3 &)
+	FUNC2(rope_apply_central_impulse, RID, const Vector3 &)
+
+	FUNC1RC(AABB, rope_get_bounds, RID)
+
 	/* JOINT API */
 
 	FUNCRID(joint)

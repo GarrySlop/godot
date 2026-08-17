@@ -38,6 +38,7 @@
 #include "joints/jolt_slider_joint_3d.h"
 #include "objects/jolt_area_3d.h"
 #include "objects/jolt_body_3d.h"
+#include "objects/jolt_rope_3d.h"
 #include "objects/jolt_soft_body_3d.h"
 #include "shapes/jolt_box_shape_3d.h"
 #include "shapes/jolt_capsule_shape_3d.h"
@@ -1250,6 +1251,245 @@ bool JoltPhysicsServer3D::soft_body_is_point_pinned(RID p_body, int p_point_inde
 	return body->is_vertex_pinned(p_point_index);
 }
 
+RID JoltPhysicsServer3D::rope_create() {
+	JoltRope3D *rope = memnew(JoltRope3D);
+	RID rid = rope_owner.make_rid(rope);
+	rope->set_rid(rid);
+	ropes.insert(rope);
+	return rid;
+}
+
+void JoltPhysicsServer3D::rope_set_space(RID p_rope, RID p_space) {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL(rope);
+
+	JoltSpace3D *space = nullptr;
+
+	if (p_space.is_valid()) {
+		space = space_owner.get_or_null(p_space);
+		ERR_FAIL_NULL(space);
+	}
+
+	rope->set_space(space);
+}
+
+RID JoltPhysicsServer3D::rope_get_space(RID p_rope) const {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL_V(rope, RID());
+
+	const JoltSpace3D *space = rope->get_space();
+	return space != nullptr ? space->get_rid() : RID();
+}
+
+void JoltPhysicsServer3D::rope_set_points(RID p_rope, const Vector<Vector3> &p_points) {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL(rope);
+
+	rope->set_points(p_points);
+}
+
+Vector<Vector3> JoltPhysicsServer3D::rope_get_points(RID p_rope) const {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL_V(rope, Vector<Vector3>());
+
+	return rope->get_points();
+}
+
+int JoltPhysicsServer3D::rope_get_point_count(RID p_rope) const {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL_V(rope, 0);
+
+	return rope->get_point_count();
+}
+
+Vector3 JoltPhysicsServer3D::rope_get_point_position(RID p_rope, int p_point_index) const {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL_V(rope, Vector3());
+
+	return rope->get_point_position(p_point_index);
+}
+
+void JoltPhysicsServer3D::rope_set_point_position(RID p_rope, int p_point_index, const Vector3 &p_position) {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL(rope);
+
+	rope->set_point_position(p_point_index, p_position);
+}
+
+Vector3 JoltPhysicsServer3D::rope_get_point_velocity(RID p_rope, int p_point_index) const {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL_V(rope, Vector3());
+
+	return rope->get_point_velocity(p_point_index);
+}
+
+void JoltPhysicsServer3D::rope_set_param(RID p_rope, RopeParameter p_param, float p_value) {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL(rope);
+
+	rope->set_param(p_param, p_value);
+}
+
+float JoltPhysicsServer3D::rope_get_param(RID p_rope, RopeParameter p_param) const {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL_V(rope, 0.0f);
+
+	return rope->get_param(p_param);
+}
+
+void JoltPhysicsServer3D::rope_set_flag(RID p_rope, RopeFlag p_flag, bool p_enabled) {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL(rope);
+
+	rope->set_flag(p_flag, p_enabled);
+}
+
+bool JoltPhysicsServer3D::rope_get_flag(RID p_rope, RopeFlag p_flag) const {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL_V(rope, false);
+
+	return rope->get_flag(p_flag);
+}
+
+void JoltPhysicsServer3D::rope_set_simulation_substeps(RID p_rope, int p_substeps) {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL(rope);
+
+	rope->set_simulation_substeps(p_substeps);
+}
+
+int JoltPhysicsServer3D::rope_get_simulation_substeps(RID p_rope) const {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL_V(rope, 0);
+
+	return rope->get_simulation_substeps();
+}
+
+void JoltPhysicsServer3D::rope_set_collision_layer(RID p_rope, uint32_t p_layer) {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL(rope);
+
+	rope->set_collision_layer(p_layer);
+}
+
+uint32_t JoltPhysicsServer3D::rope_get_collision_layer(RID p_rope) const {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL_V(rope, 0);
+
+	return rope->get_collision_layer();
+}
+
+void JoltPhysicsServer3D::rope_set_collision_mask(RID p_rope, uint32_t p_mask) {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL(rope);
+
+	rope->set_collision_mask(p_mask);
+}
+
+uint32_t JoltPhysicsServer3D::rope_get_collision_mask(RID p_rope) const {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL_V(rope, 0);
+
+	return rope->get_collision_mask();
+}
+
+void JoltPhysicsServer3D::rope_add_collision_exception(RID p_rope, RID p_body) {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL(rope);
+
+	rope->add_collision_exception(p_body);
+}
+
+void JoltPhysicsServer3D::rope_remove_collision_exception(RID p_rope, RID p_body) {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL(rope);
+
+	rope->remove_collision_exception(p_body);
+}
+
+void JoltPhysicsServer3D::rope_get_collision_exceptions(RID p_rope, List<RID> *p_exceptions) {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL(rope);
+
+	const VSet<RID> &rope_exceptions = rope->get_collision_exceptions();
+	for (int i = 0; i < rope_exceptions.size(); i++) {
+		p_exceptions->push_back(rope_exceptions[i]);
+	}
+}
+
+void JoltPhysicsServer3D::rope_pin_point(RID p_rope, int p_point_index, bool p_pin) {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL(rope);
+
+	rope->pin_point(p_point_index, p_pin);
+}
+
+bool JoltPhysicsServer3D::rope_is_point_pinned(RID p_rope, int p_point_index) const {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL_V(rope, false);
+
+	return rope->is_point_pinned(p_point_index);
+}
+
+void JoltPhysicsServer3D::rope_set_pin_position(RID p_rope, int p_point_index, const Vector3 &p_position) {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL(rope);
+
+	rope->set_pin_position(p_point_index, p_position);
+}
+
+Vector3 JoltPhysicsServer3D::rope_get_pin_position(RID p_rope, int p_point_index) const {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL_V(rope, Vector3());
+
+	return rope->get_pin_position(p_point_index);
+}
+
+void JoltPhysicsServer3D::rope_attach_point_to_body(RID p_rope, int p_point_index, RID p_body, const Vector3 &p_local_offset) {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL(rope);
+
+	JoltBody3D *body = body_owner.get_or_null(p_body);
+	ERR_FAIL_NULL(body);
+
+	rope->attach_point_to_body(p_point_index, p_body, body, p_local_offset);
+}
+
+void JoltPhysicsServer3D::rope_detach_point(RID p_rope, int p_point_index) {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL(rope);
+
+	rope->detach_point(p_point_index);
+}
+
+void JoltPhysicsServer3D::rope_remove_all_attachments(RID p_rope) {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL(rope);
+
+	rope->remove_all_attachments();
+}
+
+void JoltPhysicsServer3D::rope_apply_point_impulse(RID p_rope, int p_point_index, const Vector3 &p_impulse) {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL(rope);
+
+	rope->apply_point_impulse(p_point_index, p_impulse);
+}
+
+void JoltPhysicsServer3D::rope_apply_central_impulse(RID p_rope, const Vector3 &p_impulse) {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL(rope);
+
+	rope->apply_central_impulse(p_impulse);
+}
+
+AABB JoltPhysicsServer3D::rope_get_bounds(RID p_rope) const {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL_V(rope, AABB());
+
+	return rope->get_bounds();
+}
+
 RID JoltPhysicsServer3D::joint_create() {
 	JoltJoint3D *joint = memnew(JoltJoint3D);
 	RID rid = joint_owner.make_rid(joint);
@@ -1592,6 +1832,8 @@ void JoltPhysicsServer3D::free_rid(RID p_rid) {
 		free_area(area);
 	} else if (JoltSoftBody3D *soft_body = soft_body_owner.get_or_null(p_rid)) {
 		free_soft_body(soft_body);
+	} else if (JoltRope3D *rope = rope_owner.get_or_null(p_rid)) {
+		free_rope(rope);
 	} else if (JoltSpace3D *space = space_owner.get_or_null(p_rid)) {
 		free_space(space);
 	} else {
@@ -1688,6 +1930,13 @@ void JoltPhysicsServer3D::free_area(JoltArea3D *p_area) {
 void JoltPhysicsServer3D::free_body(JoltBody3D *p_body) {
 	ERR_FAIL_NULL(p_body);
 
+	// Ropes hold a raw pointer to the bodies they are attached to, so any such attachment has to go
+	// before the body does. `ropes` is empty in any project that does not use them, which is why
+	// this is a set walk rather than an owner-wide scan.
+	for (JoltRope3D *rope : ropes) {
+		rope->detach_from_body(p_body->get_rid());
+	}
+
 	p_body->set_space(nullptr);
 	body_owner.free(p_body->get_rid());
 	memdelete(p_body);
@@ -1699,6 +1948,16 @@ void JoltPhysicsServer3D::free_soft_body(JoltSoftBody3D *p_body) {
 	p_body->set_space(nullptr);
 	soft_body_owner.free(p_body->get_rid());
 	memdelete(p_body);
+}
+
+void JoltPhysicsServer3D::free_rope(JoltRope3D *p_rope) {
+	ERR_FAIL_NULL(p_rope);
+
+	ropes.erase(p_rope);
+
+	p_rope->set_space(nullptr);
+	rope_owner.free(p_rope->get_rid());
+	memdelete(p_rope);
 }
 
 void JoltPhysicsServer3D::free_shape(JoltShape3D *p_shape) {

@@ -909,6 +909,71 @@ void PhysicsServer3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("soft_body_apply_central_impulse", "body", "impulse"), &PhysicsServer3D::soft_body_apply_central_impulse);
 	ClassDB::bind_method(D_METHOD("soft_body_apply_central_force", "body", "force"), &PhysicsServer3D::soft_body_apply_central_force);
 
+	/* ROPE API */
+
+	ClassDB::bind_method(D_METHOD("rope_create"), &PhysicsServer3D::rope_create);
+
+	ClassDB::bind_method(D_METHOD("rope_set_space", "rope", "space"), &PhysicsServer3D::rope_set_space);
+	ClassDB::bind_method(D_METHOD("rope_get_space", "rope"), &PhysicsServer3D::rope_get_space);
+
+	ClassDB::bind_method(D_METHOD("rope_set_points", "rope", "points"), &PhysicsServer3D::rope_set_points);
+	ClassDB::bind_method(D_METHOD("rope_get_points", "rope"), &PhysicsServer3D::rope_get_points);
+	ClassDB::bind_method(D_METHOD("rope_get_point_count", "rope"), &PhysicsServer3D::rope_get_point_count);
+
+	ClassDB::bind_method(D_METHOD("rope_get_point_position", "rope", "point_index"), &PhysicsServer3D::rope_get_point_position);
+	ClassDB::bind_method(D_METHOD("rope_set_point_position", "rope", "point_index", "position"), &PhysicsServer3D::rope_set_point_position);
+	ClassDB::bind_method(D_METHOD("rope_get_point_velocity", "rope", "point_index"), &PhysicsServer3D::rope_get_point_velocity);
+
+	ClassDB::bind_method(D_METHOD("rope_set_param", "rope", "param", "value"), &PhysicsServer3D::rope_set_param);
+	ClassDB::bind_method(D_METHOD("rope_get_param", "rope", "param"), &PhysicsServer3D::rope_get_param);
+
+	ClassDB::bind_method(D_METHOD("rope_set_flag", "rope", "flag", "enabled"), &PhysicsServer3D::rope_set_flag);
+	ClassDB::bind_method(D_METHOD("rope_get_flag", "rope", "flag"), &PhysicsServer3D::rope_get_flag);
+
+	ClassDB::bind_method(D_METHOD("rope_set_simulation_substeps", "rope", "substeps"), &PhysicsServer3D::rope_set_simulation_substeps);
+	ClassDB::bind_method(D_METHOD("rope_get_simulation_substeps", "rope"), &PhysicsServer3D::rope_get_simulation_substeps);
+
+	ClassDB::bind_method(D_METHOD("rope_set_collision_layer", "rope", "layer"), &PhysicsServer3D::rope_set_collision_layer);
+	ClassDB::bind_method(D_METHOD("rope_get_collision_layer", "rope"), &PhysicsServer3D::rope_get_collision_layer);
+
+	ClassDB::bind_method(D_METHOD("rope_set_collision_mask", "rope", "mask"), &PhysicsServer3D::rope_set_collision_mask);
+	ClassDB::bind_method(D_METHOD("rope_get_collision_mask", "rope"), &PhysicsServer3D::rope_get_collision_mask);
+
+	ClassDB::bind_method(D_METHOD("rope_add_collision_exception", "rope", "body"), &PhysicsServer3D::rope_add_collision_exception);
+	ClassDB::bind_method(D_METHOD("rope_remove_collision_exception", "rope", "body"), &PhysicsServer3D::rope_remove_collision_exception);
+
+	ClassDB::bind_method(D_METHOD("rope_pin_point", "rope", "point_index", "pin"), &PhysicsServer3D::rope_pin_point);
+	ClassDB::bind_method(D_METHOD("rope_is_point_pinned", "rope", "point_index"), &PhysicsServer3D::rope_is_point_pinned);
+	ClassDB::bind_method(D_METHOD("rope_set_pin_position", "rope", "point_index", "position"), &PhysicsServer3D::rope_set_pin_position);
+	ClassDB::bind_method(D_METHOD("rope_get_pin_position", "rope", "point_index"), &PhysicsServer3D::rope_get_pin_position);
+
+	ClassDB::bind_method(D_METHOD("rope_attach_point_to_body", "rope", "point_index", "body", "local_offset"), &PhysicsServer3D::rope_attach_point_to_body);
+	ClassDB::bind_method(D_METHOD("rope_detach_point", "rope", "point_index"), &PhysicsServer3D::rope_detach_point);
+	ClassDB::bind_method(D_METHOD("rope_remove_all_attachments", "rope"), &PhysicsServer3D::rope_remove_all_attachments);
+
+	ClassDB::bind_method(D_METHOD("rope_apply_point_impulse", "rope", "point_index", "impulse"), &PhysicsServer3D::rope_apply_point_impulse);
+	ClassDB::bind_method(D_METHOD("rope_apply_central_impulse", "rope", "impulse"), &PhysicsServer3D::rope_apply_central_impulse);
+
+	ClassDB::bind_method(D_METHOD("rope_get_bounds", "rope"), &PhysicsServer3D::rope_get_bounds);
+
+	BIND_ENUM_CONSTANT(ROPE_PARAM_RADIUS);
+	BIND_ENUM_CONSTANT(ROPE_PARAM_TOTAL_MASS);
+	BIND_ENUM_CONSTANT(ROPE_PARAM_STRETCH_COMPLIANCE);
+	BIND_ENUM_CONSTANT(ROPE_PARAM_BEND_COMPLIANCE);
+	BIND_ENUM_CONSTANT(ROPE_PARAM_LINEAR_DAMPING);
+	BIND_ENUM_CONSTANT(ROPE_PARAM_DRAG);
+	BIND_ENUM_CONSTANT(ROPE_PARAM_GRAVITY_SCALE);
+	BIND_ENUM_CONSTANT(ROPE_PARAM_FRICTION);
+	BIND_ENUM_CONSTANT(ROPE_PARAM_RESTITUTION);
+	BIND_ENUM_CONSTANT(ROPE_PARAM_MAX_REACTION_IMPULSE);
+	BIND_ENUM_CONSTANT(ROPE_PARAM_LENGTH);
+	BIND_ENUM_CONSTANT(ROPE_PARAM_MAX);
+
+	BIND_ENUM_CONSTANT(ROPE_FLAG_INEXTENSIBLE);
+	BIND_ENUM_CONSTANT(ROPE_FLAG_TWO_WAY_COUPLING);
+	BIND_ENUM_CONSTANT(ROPE_FLAG_COLLISION_ENABLED);
+	BIND_ENUM_CONSTANT(ROPE_FLAG_MAX);
+
 	/* JOINT API */
 
 	ClassDB::bind_method(D_METHOD("joint_create"), &PhysicsServer3D::joint_create);

@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="RopeBody3D" inherits="MeshInstance3D" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+	</brief_description>
+	<description>
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="apply_central_impulse">
+			<return type="void" />
+			<param index="0" name="impulse" type="Vector3" />
+			<description>
+			</description>
+		</method>
+		<method name="apply_point_impulse">
+			<return type="void" />
+			<param index="0" name="point_index" type="int" />
+			<param index="1" name="impulse" type="Vector3" />
+			<description>
+			</description>
+		</method>
+		<method name="attach_point">
+			<return type="void" />
+			<param index="0" name="point_index" type="int" />
+			<param index="1" name="body" type="Node" />
+			<description>
+			</description>
+		</method>
+		<method name="detach_point">
+			<return type="void" />
+			<param index="0" name="point_index" type="int" />
+			<description>
+			</description>
+		</method>
+		<method name="get_collision_layer_value" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="layer_number" type="int" />
+			<description>
+			</description>
+		</method>
+		<method name="get_collision_mask_value" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="layer_number" type="int" />
+			<description>
+			</description>
+		</method>
+		<method name="get_physics_rid" qualifiers="const">
+			<return type="RID" />
+			<description>
+			</description>
+		</method>
+		<method name="get_point_position" qualifiers="const">
+			<return type="Vector3" />
+			<param index="0" name="point_index" type="int" />
+			<description>
+			</description>
+		</method>
+		<method name="get_point_velocity" qualifiers="const">
+			<return type="Vector3" />
+			<param index="0" name="point_index" type="int" />
+			<description>
+			</description>
+		</method>
+		<method name="get_points" qualifiers="const">
+			<return type="PackedVector3Array" />
+			<description>
+			</description>
+		</method>
+		<method name="is_point_pinned" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="point_index" type="int" />
+			<description>
+			</description>
+		</method>
+		<method name="pin_point">
+			<return type="void" />
+			<param index="0" name="point_index" type="int" />
+			<param index="1" name="pin" type="bool" />
+			<description>
+			</description>
+		</method>
+		<method name="reset">
+			<return type="void" />
+			<description>
+			</description>
+		</method>
+		<method name="set_collision_layer_value">
+			<return type="void" />
+			<param index="0" name="layer_number" type="int" />
+			<param index="1" name="value" type="bool" />
+			<description>
+			</description>
+		</method>
+		<method name="set_collision_mask_value">
+			<return type="void" />
+			<param index="0" name="layer_number" type="int" />
+			<param index="1" name="value" type="bool" />
+			<description>
+			</description>
+		</method>
+		<method name="set_pin_position">
+			<return type="void" />
+			<param index="0" name="point_index" type="int" />
+			<param index="1" name="position" type="Vector3" />
+			<description>
+			</description>
+		</method>
+	</methods>
+	<members>
+		<member name="attach_end" type="NodePath" setter="set_attach_end" getter="get_attach_end" default="NodePath(&quot;&quot;)">
+		</member>
+		<member name="attach_start" type="NodePath" setter="set_attach_start" getter="get_attach_start" default="NodePath(&quot;&quot;)">
+		</member>
+		<member name="bend_compliance" type="float" setter="set_bend_compliance" getter="get_bend_compliance" default="1000000000.0">
+		</member>
+		<member name="collision_enabled" type="bool" setter="set_collision_enabled" getter="is_collision_enabled" default="true">
+		</member>
+		<member name="collision_layer" type="int" setter="set_collision_layer" getter="get_collision_layer" default="1">
+		</member>
+		<member name="collision_mask" type="int" setter="set_collision_mask" getter="get_collision_mask" default="1">
+		</member>
+		<member name="drag" type="float" setter="set_drag" getter="get_drag" default="0.0">
+		</member>
+		<member name="friction" type="float" setter="set_friction" getter="get_friction" default="0.5">
+		</member>
+		<member name="gravity_scale" type="float" setter="set_gravity_scale" getter="get_gravity_scale" default="1.0">
+		</member>
+		<member name="inextensible" type="bool" setter="set_inextensible" getter="is_inextensible" default="true">
+		</member>
+		<member name="initial_direction" type="Vector3" setter="set_initial_direction" getter="get_initial_direction" default="Vector3(0, -1, 0)">
+		</member>
+		<member name="linear_damping" type="float" setter="set_linear_damping" getter="get_linear_damping" default="0.1">
+		</member>
+		<member name="max_reaction_impulse" type="float" setter="set_max_reaction_impulse" getter="get_max_reaction_impulse" default="100.0">
+		</member>
+		<member name="pin_end" type="bool" setter="set_pin_end" getter="is_pin_end" default="false">
+		</member>
+		<member name="pin_start" type="bool" setter="set_pin_start" getter="is_pin_start" default="true">
+		</member>
+		<member name="point_count" type="int" setter="set_point_count" getter="get_point_count" default="16">
+		</member>
+		<member name="radial_segments" type="int" setter="set_radial_segments" getter="get_radial_segments" default="6">
+		</member>
+		<member name="radius" type="float" setter="set_radius" getter="get_radius" default="0.05">
+		</member>
+		<member name="render_mode" type="int" setter="set_render_mode" getter="get_render_mode" enum="RopeBody3D.RenderMode" default="1">
+		</member>
+		<member name="restitution" type="float" setter="set_restitution" getter="get_restitution" default="0.0">
+		</member>
+		<member name="segment_length" type="float" setter="set_segment_length" getter="get_segment_length" default="0.25">
+		</member>
+		<member name="simulation_substeps" type="int" setter="set_simulation_substeps" getter="get_simulation_substeps" default="4">
+		</member>
+		<member name="stretch_compliance" type="float" setter="set_stretch_compliance" getter="get_stretch_compliance" default="0.0">
+		</member>
+		<member name="total_mass" type="float" setter="set_total_mass" getter="get_total_mass" default="1.0">
+		</member>
+		<member name="two_way_coupling" type="bool" setter="set_two_way_coupling" getter="is_two_way_coupling" default="false">
+		</member>
+	</members>
+	<constants>
+		<constant name="RENDER_NONE" value="0" enum="RenderMode">
+		</constant>
+		<constant name="RENDER_TUBE" value="1" enum="RenderMode">
+		</constant>
+		<constant name="RENDER_RIBBON" value="2" enum="RenderMode">
+		</constant>
+	</constants>
+</class>

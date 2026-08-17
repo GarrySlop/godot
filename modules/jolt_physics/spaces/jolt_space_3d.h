@@ -50,6 +50,7 @@ class JoltJoint3D;
 class JoltLayers;
 class JoltObject3D;
 class JoltPhysicsDirectSpaceState3D;
+class JoltRope3D;
 class JoltShapedObject3D;
 class JoltSoftBody3D;
 
@@ -61,6 +62,7 @@ class JoltSpace3D {
 	SelfList<JoltArea3D>::List area_call_queries_list;
 	SelfList<JoltShapedObject3D>::List shapes_changed_list;
 	SelfList<JoltShapedObject3D>::List needs_optimization_list;
+	SelfList<JoltRope3D>::List rope_list;
 
 	LocalVector<JPH::BodyID> pending_objects_sleeping;
 	LocalVector<JPH::BodyID> pending_objects_awake;
@@ -153,6 +155,9 @@ public:
 
 	void enqueue_needs_optimization(SelfList<JoltShapedObject3D> *p_object);
 	void dequeue_needs_optimization(SelfList<JoltShapedObject3D> *p_object);
+
+	void enqueue_rope(SelfList<JoltRope3D> *p_rope);
+	void dequeue_rope(SelfList<JoltRope3D> *p_rope);
 
 	void add_joint(JPH::Constraint *p_jolt_ref);
 	void add_joint(JoltJoint3D *p_joint);
