@@ -1344,7 +1344,19 @@ void JoltRope3D::_apply_reactions() {
 		// Measured against the body's *current* velocity, so the reaction knows how much of the
 		// error the body is already undoing on its own.
 		const Vector3 linear = rope_reaction_velocity(position_correction, to_godot(jolt_body->GetLinearVelocity()), frame_step, max_recovery);
-		const Vector3 angular = rope_reaction_velocity(rotation_correction, to_godot(jolt_body->GetAngularVelocity()), frame_step, max_recovery);
+		// Rotation deliberately does *not* go through the same treatment. Cancelling the body's
+		// velocity into the correction is right for the linear channel, where the correction is the
+		// rope pulling along its length and the velocity it removes is the body's drift out of reach.
+		// The rotational correction has no such privileged axis: it is whatever torque the rope's
+		// pull about the attachment happens to produce, and cancelling the body's spin about that
+		// axis destroys real rotation rather than a constraint violation.
+		Vector3 angular = rotation_correction / frame_step;
+		if (max_recovery > 0.0f) {
+			const real_t rate = angular.length();
+			if (rate > (real_t)max_recovery) {
+				angular *= (real_t)max_recovery / rate;
+			}
+		}
 
 		if (linear.length_squared() < (real_t)ROPE_EPSILON && angular.length_squared() < (real_t)ROPE_EPSILON) {
 			continue;

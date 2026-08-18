@@ -9,6 +9,7 @@
 		To set one up, give it a [member length], pick how many particles resolve it with [member point_count], and pin it: [member attach_start] and [member attach_end] cover the usual two-ended case, and the [member pin_count] array or [RopeAttachment3D] child nodes cover everything else. Length is independent of resolution, so adding points makes the rope smoother rather than longer.
 		[b]Note:[/b] Ropes are implemented only by the Jolt Physics backend. On any other physics backend the node is inert and says so with a configuration warning in the editor.
 		[b]Note:[/b] The simulation runs in world space while the mesh is generated in the node's local space. Moving the node at runtime therefore does not move a rope that is already simulating; call [method reset] for that.
+		[b]Note:[/b] If a body hanging from a rope seems to lose its swing, check the body's own damping before the rope's. [member RigidBody3D.linear_damp] defaults to combining with the project's [member ProjectSettings.physics/3d/default_linear_damp], which is [code]0.1[/code] — enough to drain roughly a fifth of a pendulum's energy per swing, independently of anything the rope does.
 		[b]Note:[/b] A rope is not a physics-server object, so no [Area3D] will ever report it in [method Area3D.get_overlapping_bodies]. Use [method get_ropes_in_area], [method is_in_area] or [method get_ratios_in_area] to ask the question from the rope's side instead.
 	</description>
 	<tutorials>
