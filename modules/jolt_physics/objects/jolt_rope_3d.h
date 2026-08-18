@@ -141,15 +141,15 @@ private:
 	SelfList<JoltRope3D> active_list;
 
 	// Particle state as parallel arrays. `rest_lengths`/`lambdas` are one entry shorter than the
-	// particle arrays, `bend_rest_lengths` two entries shorter.
+	// particle arrays, `bend_lambdas` two entries shorter.
 	LocalVector<Vector3> positions;
 	LocalVector<Vector3> prev_positions;
 	LocalVector<Vector3> velocities;
 	LocalVector<float> inv_masses;
 	LocalVector<float> base_inv_masses;
 	LocalVector<float> rest_lengths;
-	LocalVector<float> bend_rest_lengths;
 	LocalVector<float> lambdas;
+	LocalVector<float> bend_lambdas;
 	// Rest length from particle 0 to each particle, so the rest distance between any two is a
 	// subtraction rather than a walk. Rebuilt with `rest_lengths`.
 	LocalVector<float> cumulative_rest;
@@ -189,7 +189,7 @@ private:
 	float stretch_compliance = 0.0f;
 	float bend_compliance = 1e9f;
 	float linear_damping = 0.1f;
-	float drag = 0.0f;
+	float drag = 1.0f;
 	float gravity_scale = 1.0f;
 	float friction = 0.5f;
 	float restitution = 0.0f;

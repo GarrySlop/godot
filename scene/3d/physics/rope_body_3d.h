@@ -37,6 +37,7 @@
 #include "servers/physics_3d/physics_server_3d.h"
 
 class ArrayMesh;
+class Area3D;
 class RopeAttachment3D;
 
 // A rope: a chain of point masses with distance constraints, full segment-level collision, and
@@ -135,7 +136,7 @@ private:
 	float stretch_compliance = 0.0f;
 	float bend_compliance = ROPE_BEND_DISABLED;
 	float linear_damping = 0.1f;
-	float drag = 0.0f;
+	float drag = 1.0f;
 	float gravity_scale = 1.0f;
 	float friction = 0.5f;
 	float restitution = 0.0f;
@@ -154,6 +155,11 @@ private:
 	LocalVector<Pin> pins;
 	LocalVector<RopeAttachment3D *> attachments;
 	LocalVector<ResolvedPin> resolved_pins;
+
+	// Every rope currently in a tree. Ropes are not registered with the physics server as objects,
+	// so there is nothing to enumerate them with; `get_ropes_in_area()` walks this. Kept small by
+	// construction -- a level has ropes in the dozens, not the thousands.
+	static LocalVector<RopeBody3D *> all_ropes;
 
 	RenderMode render_mode = RENDER_TUBE;
 	int radial_segments = 6;
@@ -334,6 +340,26 @@ public:
 	// Where along the rope a world-space point is nearest, as a 0-1 ratio measured the same way
 	// pins and `RopeAttachment3D` measure it -- so the result can be handed straight to one. This
 	// is how you grab a rope: raycast or use the hand position, ask for the ratio, attach there.
+	/* Area overlap.
+	 *
+	 * A rope is not a physics-server object -- it is a particle chain owned by the rope solver and
+	 * stepped after the rigid-body world -- so it is invisible to the broadphase, and no `Area3D`
+	 * will ever report it in `get_overlapping_bodies()`. These ask the question from the rope's side
+	 * instead, which needs no changes to `Area3D` at all.
+	 *
+	 * They are pull queries, not monitors: call them when you want an answer. Each one costs a point
+	 * query per particle, so poll a grabbed rope every frame if you like, but don't sweep every rope
+	 * in the level against every area that way.
+	 */
+
+	// Where this rope is inside `p_area`, as 0-1 ratios measured exactly like pin ratios, one per
+	// particle that tests inside. Empty when the rope is clear of the area.
+	PackedFloat32Array get_ratios_in_area(Area3D *p_area) const;
+	// Whether any part of the rope is inside `p_area`. Stops at the first particle that is.
+	bool is_in_area(Area3D *p_area) const;
+	// Every rope in the same world with at least one particle inside `p_area`.
+	static TypedArray<RopeBody3D> get_ropes_in_area(Area3D *p_area);
+
 	float get_closest_ratio(const Vector3 &p_world_point) const;
 	// The nearest point on the rope itself, along a segment rather than snapped to a particle.
 	Vector3 get_closest_point(const Vector3 &p_world_point) const;

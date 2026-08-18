@@ -34,6 +34,7 @@
 #include "core/config/project_settings.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
+#include "scene/3d/physics/area_3d.h"
 #include "scene/3d/physics/physics_body_3d.h"
 #include "scene/3d/physics/rope_attachment_3d.h"
 #include "scene/main/scene_tree.h"
@@ -137,12 +138,16 @@ void RopeBody3D::_notification(int p_what) {
 
 			set_physics_process_internal(true);
 			RS::get_singleton()->connect("frame_pre_draw", callable_mp(this, &RopeBody3D::_update_mesh));
+
+			all_ropes.push_back(this);
 		} break;
 
 		case NOTIFICATION_EXIT_WORLD: {
 			if (!is_backend_supported()) {
 				break;
 			}
+
+			all_ropes.erase(this);
 
 			if (RS::get_singleton()->is_connected("frame_pre_draw", callable_mp(this, &RopeBody3D::_update_mesh))) {
 				RS::get_singleton()->disconnect("frame_pre_draw", callable_mp(this, &RopeBody3D::_update_mesh));
@@ -519,7 +524,13 @@ void RopeBody3D::_rebuild_points() {
 	ps->rope_set_param(rope, PhysicsServer3D::ROPE_PARAM_LENGTH, target_length);
 
 	_apply_pins();
-	_mark_mesh_dirty();
+
+	// Deliberately *not* `_mark_mesh_dirty()`. Only the point positions changed here, and those are
+	// rewritten from `rope_get_points()` every frame anyway; the mesh's topology depends solely on
+	// `point_count`, `render_mode` and `radial_segments`, which mark it dirty themselves. Rebuilding
+	// here would re-run `set_mesh()` on every drag tick of a float in the inspector, and that fires
+	// `notify_property_list_changed()`, which rebuilds the inspector out from under the spinner you
+	// are dragging and drops the grab.
 }
 
 void RopeBody3D::_apply_pins() {
@@ -889,6 +900,160 @@ static float rope_closest_findex(const PackedVector3Array &p_points, const Vecto
 	return best_findex;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Area overlap                                                               */
+/* -------------------------------------------------------------------------- */
+
+LocalVector<RopeBody3D *> RopeBody3D::all_ropes;
+
+namespace {
+
+// Most points sit inside at most a handful of areas at once; anything deeper than this and the
+// answer for one more overlapping area is not worth the query time.
+constexpr int ROPE_AREA_QUERY_RESULTS = 32;
+
+// Point query set up once and reused for every particle of every rope in a sweep.
+//
+// `collision_mask` is the *area's own layer*, so the broadphase discards everything else before any
+// narrow-phase work happens -- without it each particle would be tested against every area in the
+// level. An area with no layer bits set would then match nothing, which is never what the caller
+// meant when they passed that area in explicitly, so it falls back to matching everything.
+PhysicsDirectSpaceState3D::PointParameters rope_area_point_params(const Area3D *p_area) {
+	PhysicsDirectSpaceState3D::PointParameters params;
+	params.collide_with_bodies = false;
+	params.collide_with_areas = true;
+
+	const uint32_t layer = p_area->get_collision_layer();
+	params.collision_mask = layer != 0 ? layer : UINT32_MAX;
+
+	return params;
+}
+
+// Indices of `p_points` that lie inside `p_area`. `p_first_only` stops at the first hit, which is
+// all `is_in_area()` needs and usually saves most of the queries.
+LocalVector<int> rope_points_in_area(PhysicsDirectSpaceState3D *p_state, const PackedVector3Array &p_points, ObjectID p_area_id, PhysicsDirectSpaceState3D::PointParameters &p_params, bool p_first_only) {
+	LocalVector<int> inside;
+
+	PhysicsDirectSpaceState3D::ShapeResult results[ROPE_AREA_QUERY_RESULTS];
+	const int count = p_points.size();
+
+	for (int i = 0; i < count; i++) {
+		p_params.position = p_points[i];
+
+		const int hits = p_state->intersect_point(p_params, results, ROPE_AREA_QUERY_RESULTS);
+		for (int h = 0; h < hits; h++) {
+			if (results[h].collider_id != p_area_id) {
+				continue;
+			}
+
+			inside.push_back(i);
+			break;
+		}
+
+		if (p_first_only && !inside.is_empty()) {
+			break;
+		}
+	}
+
+	return inside;
+}
+
+} // namespace
+
+PackedFloat32Array RopeBody3D::get_ratios_in_area(Area3D *p_area) const {
+	PackedFloat32Array ratios;
+
+	ERR_FAIL_NULL_V(p_area, ratios);
+	if (!is_backend_supported() || !is_inside_tree() || !p_area->is_inside_tree()) {
+		return ratios;
+	}
+	// Comparing worlds rather than spaces: the query runs against the area's world, and a rope in a
+	// different one can never overlap it however close the coordinates look.
+	if (p_area->get_world_3d() != get_world_3d()) {
+		return ratios;
+	}
+
+	PhysicsDirectSpaceState3D *state = p_area->get_world_3d()->get_direct_space_state();
+	if (state == nullptr) {
+		return ratios;
+	}
+
+	const PackedVector3Array points = PhysicsServer3D::get_singleton()->rope_get_points(rope);
+	const int count = points.size();
+	if (count < 2) {
+		return ratios;
+	}
+
+	PhysicsDirectSpaceState3D::PointParameters params = rope_area_point_params(p_area);
+	const LocalVector<int> inside = rope_points_in_area(state, points, p_area->get_instance_id(), params, false);
+
+	ratios.resize(inside.size());
+	float *write = ratios.ptrw();
+	for (uint32_t i = 0; i < inside.size(); i++) {
+		write[i] = (float)inside[i] / (float)(count - 1);
+	}
+
+	return ratios;
+}
+
+bool RopeBody3D::is_in_area(Area3D *p_area) const {
+	ERR_FAIL_NULL_V(p_area, false);
+	if (!is_backend_supported() || !is_inside_tree() || !p_area->is_inside_tree()) {
+		return false;
+	}
+	if (p_area->get_world_3d() != get_world_3d()) {
+		return false;
+	}
+
+	PhysicsDirectSpaceState3D *state = p_area->get_world_3d()->get_direct_space_state();
+	if (state == nullptr) {
+		return false;
+	}
+
+	const PackedVector3Array points = PhysicsServer3D::get_singleton()->rope_get_points(rope);
+	if (points.size() < 2) {
+		return false;
+	}
+
+	PhysicsDirectSpaceState3D::PointParameters params = rope_area_point_params(p_area);
+	return !rope_points_in_area(state, points, p_area->get_instance_id(), params, true).is_empty();
+}
+
+TypedArray<RopeBody3D> RopeBody3D::get_ropes_in_area(Area3D *p_area) {
+	TypedArray<RopeBody3D> found;
+
+	ERR_FAIL_NULL_V(p_area, found);
+	if (!p_area->is_inside_tree()) {
+		return found;
+	}
+
+	const Ref<World3D> world = p_area->get_world_3d();
+	PhysicsDirectSpaceState3D *state = world.is_valid() ? world->get_direct_space_state() : nullptr;
+	if (state == nullptr) {
+		return found;
+	}
+
+	PhysicsDirectSpaceState3D::PointParameters params = rope_area_point_params(p_area);
+	const ObjectID area_id = p_area->get_instance_id();
+
+	for (RopeBody3D *candidate : all_ropes) {
+		if (!candidate->is_backend_supported() || candidate->get_world_3d() != world) {
+			continue;
+		}
+
+		const PackedVector3Array points = PhysicsServer3D::get_singleton()->rope_get_points(candidate->rope);
+		if (points.size() < 2) {
+			continue;
+		}
+
+		if (!rope_points_in_area(state, points, area_id, params, true).is_empty()) {
+			found.push_back(candidate);
+		}
+	}
+
+	return found;
+}
+
 float RopeBody3D::get_closest_ratio(const Vector3 &p_world_point) const {
 	const PackedVector3Array points = get_points();
 	if (points.size() < 2) {
@@ -993,7 +1158,9 @@ void RopeBody3D::_rebuild_mesh() {
 
 	if (render_mode == RENDER_NONE || point_count < 2) {
 		rope_mesh.unref();
-		set_mesh(Ref<Mesh>());
+		if (get_mesh().is_valid()) {
+			set_mesh(Ref<Mesh>());
+		}
 		return;
 	}
 
@@ -1057,13 +1224,25 @@ void RopeBody3D::_rebuild_mesh() {
 	arrays[Mesh::ARRAY_TEX_UV] = uvs;
 	arrays[Mesh::ARRAY_INDEX] = indices;
 
-	rope_mesh.instantiate();
+	// Reuse the existing mesh rather than instantiating a fresh one. `MeshInstance3D::set_mesh()`
+	// calls `notify_property_list_changed()` (it has to, for blend shapes and surface overrides),
+	// which tears down and rebuilds the inspector -- and that cancels an in-progress drag on any
+	// property that got us here, such as `point_count` or `radial_segments`. Keeping the same
+	// resource means `set_mesh()` only ever runs once.
+	if (rope_mesh.is_valid()) {
+		rope_mesh->clear_surfaces();
+	} else {
+		rope_mesh.instantiate();
+	}
+
 	// `ARRAY_FLAG_USE_DYNAMIC_UPDATE` is what makes `mesh_surface_update_vertex_region()` legal on
 	// this surface; attribute compression is left off so the vertex buffer layout stays the plain
 	// one the per-frame update writes.
 	rope_mesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays, TypedArray<Array>(), Dictionary(), Mesh::ARRAY_FLAG_USE_DYNAMIC_UPDATE);
 
-	set_mesh(rope_mesh);
+	if (get_mesh() != rope_mesh) {
+		set_mesh(rope_mesh);
+	}
 
 	if (render_mode == RENDER_RIBBON) {
 		set_surface_override_material(0, _get_ribbon_material());
@@ -1661,6 +1840,10 @@ void RopeBody3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_point_velocity", "point_index"), &RopeBody3D::get_point_velocity);
 	ClassDB::bind_method(D_METHOD("get_points"), &RopeBody3D::get_points);
 	ClassDB::bind_method(D_METHOD("get_simulated_length"), &RopeBody3D::get_simulated_length);
+
+	ClassDB::bind_method(D_METHOD("get_ratios_in_area", "area"), &RopeBody3D::get_ratios_in_area);
+	ClassDB::bind_method(D_METHOD("is_in_area", "area"), &RopeBody3D::is_in_area);
+	ClassDB::bind_static_method("RopeBody3D", D_METHOD("get_ropes_in_area", "area"), &RopeBody3D::get_ropes_in_area);
 
 	ClassDB::bind_method(D_METHOD("get_closest_ratio", "world_point"), &RopeBody3D::get_closest_ratio);
 	ClassDB::bind_method(D_METHOD("get_closest_point", "world_point"), &RopeBody3D::get_closest_point);

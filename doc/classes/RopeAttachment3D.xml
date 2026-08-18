@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="RopeAttachment3D" inherits="Node3D" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		Marks the point where a rope is tied to something.
+	</brief_description>
+	<description>
+		Place this under the node a [RopeBody3D] should connect to — usually a [PhysicsBody3D] — position it where the knot goes, point [member rope] at the rope, and set [member ratio] to the spot along that rope which should be held there.
+		Because it is an ordinary [Node3D], the connection point is placed with the normal editor move gizmo and travels with its parent for free. That is the whole reason to prefer it over an entry in the rope's own pin array: the attachment point belongs to the [i]thing being tied to[/i], not to the rope, so it should be authored and moved alongside it.
+		If there is a [PhysicsBody3D] anywhere up the parent chain, the rope is genuinely attached to that body at this offset, and when the body is dynamic the two pull on each other. With no body above it, this is simply a moving pin that the rope follows.
+		[b]Note:[/b] This is equivalent to a pin in the rope's [member RopeBody3D.pin_count] array at the same ratio, and produces identical simulation results. Where both name the same point on the rope, the attachment node wins.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="get_attached_body" qualifiers="const">
+			<return type="PhysicsBody3D" />
+			<description>
+				Returns the nearest [PhysicsBody3D] at or above this node in the tree, which is the body the rope is really tied to, or [code]null[/code] if there is none and this is acting as a plain moving pin.
+				The search stops if it reaches a [RopeBody3D] first, so an attachment parented under a rope does not accidentally bind to a body further up the scene.
+			</description>
+		</method>
+	</methods>
+	<members>
+		<member name="ratio" type="float" setter="set_ratio" getter="get_ratio" default="0.0">
+			Where along the rope this attachment holds it, from [code]0.0[/code] at the rope's start to [code]1.0[/code] at its end.
+			Stored as a ratio rather than a particle index, so the attachment stays where you put it when [member RopeBody3D.point_count] changes. Use [method RopeBody3D.get_closest_ratio] to work out the right value for a point in space — that is how you attach to a rope where the player grabbed it.
+		</member>
+		<member name="rope" type="NodePath" setter="set_rope" getter="get_rope" default="NodePath(&quot;&quot;)">
+			The [RopeBody3D] this attachment connects to. The rope may live anywhere in the scene; it does not need to be related to this node in the tree.
+			The attachment does nothing until this is set.
+		</member>
+	</members>
+</class>

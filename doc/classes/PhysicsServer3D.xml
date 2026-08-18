@@ -1736,7 +1736,10 @@
 		</constant>
 		<constant name="ROPE_PARAM_MAX_REACTION_IMPULSE" value="9" enum="RopeParameter">
 		</constant>
-		<constant name="ROPE_PARAM_MAX" value="10" enum="RopeParameter">
+		<constant name="ROPE_PARAM_LENGTH" value="10" enum="RopeParameter">
+			Total rest length of the rope. Zero means derive it from the spacing of the points passed to [method rope_set_points], which is the behaviour when no length is requested.
+		</constant>
+		<constant name="ROPE_PARAM_MAX" value="11" enum="RopeParameter">
 		</constant>
 		<constant name="ROPE_FLAG_INEXTENSIBLE" value="0" enum="RopeFlag">
 		</constant>

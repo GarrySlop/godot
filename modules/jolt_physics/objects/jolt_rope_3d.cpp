@@ -65,6 +65,20 @@ constexpr float ROPE_SPECULATIVE_MARGIN = 0.02f;
 // constraint would just be arithmetic with no visible effect.
 constexpr float ROPE_BEND_DISABLED_COMPLIANCE = 1e6f;
 
+// Fraction of a leftover positional error handed back to a rigid body as velocity per frame, after
+// the part of its own motion that fights the rope has been cancelled. See
+// `rope_reaction_velocity()`. Low enough that recovery is a visible settle rather than a snap, high
+// enough that the error is gone within a few frames.
+constexpr float ROPE_REACTION_RELAXATION = 0.25f;
+
+// Gauss-Seidel sweeps the bending constraint gets per substep. It gets more than the distance
+// constraint because it is the constraint that has to carry a shape along the whole rope, and
+// Gauss-Seidel propagates about one particle per sweep; measured on a two-metre rope, going from two
+// sweeps to eight moves the stiffest setting from barely distinguishable from floppy to close to the
+// tightest arc the length constraints allow. It costs nothing at the default `bend_compliance`,
+// where `_solve_bending()` returns immediately.
+constexpr int ROPE_BEND_SWEEPS = 8;
+
 // Rope-specific query filter. `JoltQueryFilter3D` is built around `PhysicsDirectSpaceState3D` query
 // parameters, so ropes carry their own trivial version over layer/mask plus the exception set.
 class JoltRopeQueryFilter3D final
@@ -270,15 +284,12 @@ void JoltRope3D::_update_rest_lengths() {
 		}
 	}
 
-	// Bending spans two segments. Its rest value is deliberately the *straight* distance rather
-	// than the one measured from the authored pose: that pose is only where the rope spawns, not a
-	// shape it should spring back to. Capturing the pose would also make this constraint able only
-	// ever to pull particles apart, which stretches the rope.
+	// Bending spans two segments. Its rest state is deliberately *straight* rather than the shape
+	// measured from the authored pose: that pose is only where the rope spawns, not something it
+	// should spring back to. Straight is the zero of the constraint in `_solve_bending()`, so there
+	// is no per-triple rest value to store -- only the accumulated multipliers.
 	const uint32_t bend_count = count > 1 ? count - 2 : 0;
-	bend_rest_lengths.resize(bend_count);
-	for (uint32_t i = 0; i < bend_count; i++) {
-		bend_rest_lengths[i] = rest_lengths[i] + rest_lengths[i + 1];
-	}
+	bend_lambdas.resize(bend_count);
 
 	cumulative_rest.resize(count);
 	if (count > 0) {
@@ -898,7 +909,7 @@ void JoltRope3D::_solve_distance(float p_step) {
 }
 
 void JoltRope3D::_solve_bending(float p_step) {
-	const uint32_t bend_count = bend_rest_lengths.size();
+	const uint32_t bend_count = bend_lambdas.size();
 	if (bend_count == 0 || bend_compliance >= ROPE_BEND_DISABLED_COMPLIANCE) {
 		return;
 	}
@@ -906,26 +917,55 @@ void JoltRope3D::_solve_bending(float p_step) {
 	const float alpha = bend_compliance / (p_step * p_step);
 
 	for (uint32_t i = 0; i < bend_count; i++) {
-		const float w0 = inv_masses[i];
-		const float w1 = inv_masses[i + 2];
-		const float w = w0 + w1;
-		if (w <= 0.0f) {
-			continue;
+		bend_lambdas[i] = 0.0f;
+	}
+
+	// Symmetric, and with proper XPBD lambda accumulation, for the same reasons `_solve_distance()`
+	// is. It matters far more here: bending is what makes a rope hold a shape along its whole
+	// length, so the stiffness has to travel from one end to the other, and Gauss-Seidel carries it
+	// about one particle per sweep. A single forward sweep per substep therefore reached only four
+	// particles of a twenty-one particle rope at the default substep count -- which made the
+	// compliance slider look inert across its entire range, because what limited the result was
+	// convergence rather than the stiffness being asked for.
+	for (int pass = 0; pass < ROPE_BEND_SWEEPS; pass++) {
+		const bool forward = (pass % 2) == 0;
+
+		for (uint32_t s = 0; s < bend_count; s++) {
+			const uint32_t i = forward ? s : (bend_count - 1 - s);
+
+			const float w0 = inv_masses[i];
+			const float w1 = inv_masses[i + 1];
+			const float w2 = inv_masses[i + 2];
+
+			// Gradient magnitudes are 1 for the middle particle and 1/2 for each neighbour, so the
+			// neighbours contribute a quarter of their inverse mass to the effective one.
+			const float w = w1 + 0.25f * (w0 + w2);
+			if (w <= 0.0f) {
+				continue;
+			}
+
+			// How far the middle particle stands off the line joining its neighbours. Zero when the
+			// three are collinear, which is the rest state, and -- unlike the chord between the
+			// outer two -- it grows linearly with the fold angle rather than quadratically.
+			const Vector3 offset = positions[i + 1] - (positions[i] + positions[i + 2]) * 0.5f;
+			const float error = (float)offset.length();
+			if (error < ROPE_EPSILON) {
+				continue;
+			}
+
+			const Vector3 normal = offset / error;
+
+			const float delta_lambda = (-error - alpha * bend_lambdas[i]) / (w + alpha);
+			bend_lambdas[i] += delta_lambda;
+
+			const Vector3 correction = normal * delta_lambda;
+
+			// The middle particle moves toward the chord and the neighbours move the other way, each
+			// by half as much -- so the triple straightens without the group drifting.
+			positions[i + 1] += correction * w1;
+			positions[i] -= correction * (0.5f * w0);
+			positions[i + 2] -= correction * (0.5f * w2);
 		}
-
-		const Vector3 delta = positions[i + 2] - positions[i];
-		const float length = (float)delta.length();
-		if (length < ROPE_EPSILON) {
-			continue;
-		}
-
-		const Vector3 normal = delta / length;
-		const float error = length - bend_rest_lengths[i];
-		const float delta_lambda = -error / (w + alpha);
-
-		const Vector3 correction = normal * delta_lambda;
-		positions[i] -= correction * w0;
-		positions[i + 2] += correction * w1;
 	}
 }
 
@@ -1213,6 +1253,50 @@ void JoltRope3D::_update_bounds() {
 	bounds.grow_by(radius);
 }
 
+// Turns a correction the rope wants applied to a rigid body's pose into a velocity change that can
+// never add energy.
+//
+// The rope has no authority to move a Jolt body directly -- Jolt has already finished stepping by
+// the time the rope runs -- so all it can do is change velocity. The naive conversion,
+// `v += correction / dt`, is wrong in a way that is very visible: the body keeps whatever velocity
+// carried it out of reach *and* gains a full inward velocity on top of it, so it is flung back past
+// the constraint, overshoots, and rings. That is the violent bouncing an `inextensible` rope shows
+// when a heavy body swings outside its reach, and the same term is what lets a spring-driven body
+// pressing into a rope get launched off it.
+//
+// The change is split into two terms instead, both along the correction direction:
+//
+//  - Cancel exactly the component of the body's own velocity that is fighting the correction. This
+//    is what a real inelastic constraint does; it only ever removes energy, it brings the body to
+//    rest against the constraint rather than reversing it, and because the correction points along
+//    the rope it leaves tangential swing completely alone.
+//  - Add a small fraction of the positional error on top, so whatever violation is left drains away
+//    over a few frames rather than being snapped out in one.
+//
+// Note that the result is deliberately *not* clamped to the positional error. The two terms measure
+// different things: on the frame a falling load first crosses the limit the error is only the
+// fraction of the frame it spent past it, while the velocity that has to go is the body's whole
+// approach speed. Clamping to the error stops far too little on that frame, leaves the body to sink
+// further in, and then over-corrects on the frames after -- which reads as a bounce. `max_reaction_
+// impulse` bounds the second term only, for the reasons given at its use below.
+static Vector3 rope_reaction_velocity(const Vector3 &p_correction, const Vector3 &p_body_velocity, float p_step, float p_max_recovery) {
+	const Vector3 wanted = p_correction / p_step;
+	const real_t error_rate = wanted.length();
+	if (error_rate < (real_t)ROPE_EPSILON) {
+		return Vector3();
+	}
+
+	const Vector3 direction = wanted / error_rate;
+	const real_t opposing = MAX((real_t)0.0, -p_body_velocity.dot(direction));
+
+	real_t recovery = (real_t)ROPE_REACTION_RELAXATION * error_rate;
+	if (p_max_recovery > 0.0f) {
+		recovery = MIN(recovery, (real_t)p_max_recovery);
+	}
+
+	return direction * (opposing + recovery);
+}
+
 void JoltRope3D::_apply_reactions() {
 	JPH::BodyInterface &body_iface = space->get_body_iface();
 
@@ -1227,8 +1311,8 @@ void JoltRope3D::_apply_reactions() {
 		// simply drifts under gravity and is re-fetched every substep, so the same sum is mostly
 		// gravity being counted over and over. Turning that into an impulse holds the body up in
 		// mid-air against its own weight.
-		Vector3 linear = info.position_delta / frame_step;
-		Vector3 angular = info.rotation_delta / frame_step;
+		const Vector3 position_correction = info.position_delta;
+		const Vector3 rotation_correction = info.rotation_delta;
 
 		info.position_delta = Vector3();
 		info.rotation_delta = Vector3();
@@ -1237,25 +1321,32 @@ void JoltRope3D::_apply_reactions() {
 			continue;
 		}
 
-		if (linear.length_squared() < (real_t)ROPE_EPSILON && angular.length_squared() < (real_t)ROPE_EPSILON) {
+		if (position_correction.length_squared() < (real_t)ROPE_EPSILON && rotation_correction.length_squared() < (real_t)ROPE_EPSILON) {
 			continue;
-		}
-
-		// A stiff rope attached to a light body can otherwise ask for an unbounded change and launch
-		// it across the level. The limit is expressed as an impulse, so it becomes a velocity limit
-		// once divided through by the body's mass.
-		if (max_reaction_impulse > 0.0f && info.inv_mass > 0.0f) {
-			const float max_speed = max_reaction_impulse * info.inv_mass;
-			const float speed = (float)linear.length();
-			if (speed > max_speed) {
-				const float ratio = max_speed / speed;
-				linear *= ratio;
-				angular *= ratio;
-			}
 		}
 
 		JPH::Body *jolt_body = space->try_get_jolt_body(info.body_id);
 		if (jolt_body == nullptr || !jolt_body->IsDynamic()) {
+			continue;
+		}
+
+		// Ceiling on the *recovery* half of the reaction only -- the half that pushes a body back
+		// into a legal pose and is therefore the only half that can add energy. It is expressed as
+		// an impulse, so dividing through by the body's mass turns it into a speed.
+		//
+		// The velocity-cancelling half is deliberately left uncapped. Capping it does not make
+		// anything safer: it can only ever bring the body to rest against the constraint, never push
+		// it past. What capping it *does* do is stop a heavy load dead, so it sinks further past the
+		// limit, and the error it builds up on the way in comes back out later as a rebound. That
+		// was the violent bouncing on an `inextensible` rope: the reaction cap, not the constraint.
+		const float max_recovery = (max_reaction_impulse > 0.0f && info.inv_mass > 0.0f) ? max_reaction_impulse * info.inv_mass : 0.0f;
+
+		// Measured against the body's *current* velocity, so the reaction knows how much of the
+		// error the body is already undoing on its own.
+		const Vector3 linear = rope_reaction_velocity(position_correction, to_godot(jolt_body->GetLinearVelocity()), frame_step, max_recovery);
+		const Vector3 angular = rope_reaction_velocity(rotation_correction, to_godot(jolt_body->GetAngularVelocity()), frame_step, max_recovery);
+
+		if (linear.length_squared() < (real_t)ROPE_EPSILON && angular.length_squared() < (real_t)ROPE_EPSILON) {
 			continue;
 		}
 
