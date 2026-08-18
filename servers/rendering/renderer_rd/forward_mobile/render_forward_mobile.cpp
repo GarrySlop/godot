@@ -758,6 +758,9 @@ void RenderForwardMobile::_setup_lightmaps(const RenderDataRD *p_render_data, co
 		scene_state.lightmap_has_sh[i] = light_storage->lightmap_uses_spherical_harmonics(lightmap);
 
 		scene_state.lightmaps_used++;
+
+		scene_state.lightmaps[i].specular_intensity = light_storage->lightmap_get_specular_intensity(lightmap);
+		scene_state.lightmap_has_specular[i] = scene_state.lightmaps[i].specular_intensity > 0.0f;
 	}
 	if (scene_state.lightmaps_used > 0) {
 		RD::get_singleton()->buffer_update(scene_state.lightmap_buffer, 0, sizeof(LightmapData) * scene_state.lightmaps_used, scene_state.lightmaps);
@@ -2308,6 +2311,7 @@ void RenderForwardMobile::_fill_render_list(RenderListType p_render_list, const 
 
 			// ADD Element
 			if (p_pass_mode == PASS_MODE_COLOR || p_pass_mode == PASS_MODE_COLOR_TRANSPARENT || p_pass_mode == PASS_MODE_MOTION_VECTORS) {
+				surf->lightmap_has_specular = false;
 #ifdef DEBUG_ENABLED
 				bool force_alpha = unlikely(get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_OVERDRAW);
 #else
@@ -2322,6 +2326,7 @@ void RenderForwardMobile::_fill_render_list(RenderListType p_render_list, const 
 
 				if (uses_lightmap) {
 					surf->sort.uses_lightmap = 1; // This needs to become our lightmap index but we'll do that in a separate PR.
+					surf->lightmap_has_specular = scene_state.lightmap_has_specular[inst->gi_offset_cache & 0xFFFF];
 					scene_state.used_lightmap = true;
 				}
 
@@ -2452,6 +2457,7 @@ void RenderForwardMobile::_render_list_template(RenderingDevice::DrawListID p_dr
 		}
 
 		SceneShaderForwardMobile::ShaderSpecialization pipeline_specialization = p_params->base_specialization;
+		pipeline_specialization.use_lightmap_specular = surf->lightmap_has_specular;
 		pipeline_specialization.multimesh = bool(inst->flags_cache & INSTANCE_DATA_FLAG_MULTIMESH);
 		pipeline_specialization.multimesh_format_2d = bool(inst->flags_cache & INSTANCE_DATA_FLAG_MULTIMESH_FORMAT_2D);
 		pipeline_specialization.multimesh_has_color = bool(inst->flags_cache & INSTANCE_DATA_FLAG_MULTIMESH_HAS_COLOR);
