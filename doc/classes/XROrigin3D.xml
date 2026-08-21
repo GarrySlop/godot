@@ -16,6 +16,10 @@
 		<member name="current" type="bool" setter="set_current" getter="is_current" default="false">
 			If [code]true[/code], this origin node is currently being used by the [XRServer]. Only one origin point can be used at a time.
 		</member>
+		<member name="tracking_enabled" type="bool" setter="set_tracking_enabled" getter="is_tracking_enabled" default="true">
+			If [code]true[/code], this origin node takes part in XR tracking, meaning it can become the origin point used by the [XRServer] (see [member current]).
+			If [code]false[/code], the node is decoupled from the XR runtime and behaves like a regular [Node3D]: it never becomes [member current], it never updates [member XRServer.world_origin], and it is skipped when another origin node hands over being current. This is useful when the same scene is used to represent other players in a multiplayer game, where the transforms are provided by the network instead of by the local XR runtime.
+		</member>
 		<member name="world_scale" type="float" setter="set_world_scale" getter="get_world_scale" default="1.0">
 			The scale of the game world compared to the real world. This is the same as [member XRServer.world_scale]. By default, most AR/VR platforms assume that 1 game unit corresponds to 1 real world meter.
 		</member>

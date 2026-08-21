@@ -13,5 +13,9 @@
 	</tutorials>
 	<members>
 		<member name="physics_interpolation_mode" type="int" setter="set_physics_interpolation_mode" getter="get_physics_interpolation_mode" overrides="Node" enum="Node.PhysicsInterpolationMode" default="2" />
+		<member name="tracking_enabled" type="bool" setter="set_tracking_enabled" getter="is_tracking_enabled" default="true">
+			If [code]true[/code], this node's transform is automatically updated with the tracking data of the head tracker.
+			If [code]false[/code], the node is decoupled from the XR runtime and behaves like a regular [Camera3D] whose transform you set yourself. This is useful when the same scene is used to represent other players in a multiplayer game, where the transform is provided by the network instead of by the local XR runtime.
+		</member>
 	</members>
 </class>

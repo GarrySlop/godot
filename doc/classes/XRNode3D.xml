@@ -58,6 +58,10 @@
 			The name of the tracker we're bound to. Which trackers are available is not known during design time.
 			Godot defines a number of standard trackers such as [code]left_hand[/code] and [code]right_hand[/code] but others may be configured within a given [XRInterface].
 		</member>
+		<member name="tracking_enabled" type="bool" setter="set_tracking_enabled" getter="is_tracking_enabled" default="true">
+			If [code]true[/code], this node's transform, visibility (see [member show_when_tracked]) and input signals are automatically updated with the tracking data of [member tracker].
+			If [code]false[/code], the node is decoupled from the XR runtime and behaves like a regular [Node3D] whose transform and visibility you set yourself, and [method get_is_active] returns [code]false[/code]. This is useful when the same scene is used to represent other players in a multiplayer game, where the transform is provided by the network instead of by the local XR runtime.
+		</member>
 	</members>
 	<signals>
 		<signal name="tracking_changed">

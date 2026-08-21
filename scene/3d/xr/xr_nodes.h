@@ -46,7 +46,9 @@ protected:
 	StringName tracker_name = "head";
 	StringName pose_name = SceneStringName(default_);
 	Ref<XRPositionalTracker> tracker;
+	bool tracking_enabled = true;
 
+	static void _bind_methods();
 	void _validate_property(PropertyInfo &p_property) const;
 
 	void _bind_tracker();
@@ -57,6 +59,9 @@ protected:
 	virtual void _physics_interpolated_changed() override;
 
 public:
+	void set_tracking_enabled(bool p_enabled);
+	bool is_tracking_enabled() const;
+
 	PackedStringArray get_configuration_warnings() const override;
 
 	virtual Vector3 project_local_ray_normal(const Point2 &p_pos) const override;
@@ -82,6 +87,7 @@ private:
 	StringName pose_name = SceneStringName(default_);
 	bool has_tracking_data = false;
 	bool show_when_tracked = false;
+	bool tracking_enabled = true;
 
 protected:
 	Ref<XRPositionalTracker> tracker;
@@ -113,6 +119,9 @@ public:
 
 	void set_show_when_tracked(bool p_show);
 	bool get_show_when_tracked() const;
+
+	void set_tracking_enabled(bool p_enabled);
+	bool is_tracking_enabled() const;
 
 	void trigger_haptic_pulse(const String &p_action_name, double p_frequency, double p_amplitude, double p_duration_sec, double p_delay_sec = 0);
 
@@ -188,7 +197,8 @@ class XROrigin3D : public Node3D {
 
 private:
 	bool current = false;
-	static Vector<XROrigin3D *> origin_nodes; // all origin nodes in tree
+	bool tracking_enabled = true;
+	static Vector<XROrigin3D *> origin_nodes; // all origin nodes in tree that participate in XR tracking
 
 	void _set_current(bool p_enabled, bool p_update_others);
 
@@ -205,4 +215,7 @@ public:
 
 	void set_current(bool p_enabled);
 	bool is_current() const;
+
+	void set_tracking_enabled(bool p_enabled);
+	bool is_tracking_enabled() const;
 };

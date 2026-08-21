@@ -40,6 +40,12 @@
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+void XRCamera3D::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("set_tracking_enabled", "enabled"), &XRCamera3D::set_tracking_enabled);
+	ClassDB::bind_method(D_METHOD("is_tracking_enabled"), &XRCamera3D::is_tracking_enabled);
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "tracking_enabled"), "set_tracking_enabled", "is_tracking_enabled");
+}
+
 void XRCamera3D::_validate_property(PropertyInfo &p_property) const {
 	if (!Engine::get_singleton()->is_editor_hint()) {
 		return;
@@ -51,6 +57,11 @@ void XRCamera3D::_validate_property(PropertyInfo &p_property) const {
 }
 
 void XRCamera3D::_bind_tracker() {
+	if (!tracking_enabled) {
+		// We've been decoupled from the XR runtime, we act like a normal Camera3D.
+		return;
+	}
+
 	XRServer *xr_server = XRServer::get_singleton();
 	ERR_FAIL_NULL(xr_server);
 
@@ -88,6 +99,27 @@ void XRCamera3D::_pose_changed(const Ref<XRPose> &p_pose) {
 	if (p_pose->get_name() == pose_name) {
 		set_transform(p_pose->get_adjusted_transform());
 	}
+}
+
+void XRCamera3D::set_tracking_enabled(bool p_enabled) {
+	if (tracking_enabled == p_enabled) {
+		return;
+	}
+
+	tracking_enabled = p_enabled;
+
+	if (tracking_enabled) {
+		// Bind to our tracker again (if it exists) and sync up with its current pose.
+		_unbind_tracker();
+		_bind_tracker();
+	} else {
+		// Stop listening to the tracker, our transform is now ours to control.
+		_unbind_tracker();
+	}
+}
+
+bool XRCamera3D::is_tracking_enabled() const {
+	return tracking_enabled;
 }
 
 void XRCamera3D::_physics_interpolated_changed() {
@@ -260,6 +292,10 @@ void XRNode3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_show_when_tracked"), &XRNode3D::get_show_when_tracked);
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "show_when_tracked"), "set_show_when_tracked", "get_show_when_tracked");
 
+	ClassDB::bind_method(D_METHOD("set_tracking_enabled", "enabled"), &XRNode3D::set_tracking_enabled);
+	ClassDB::bind_method(D_METHOD("is_tracking_enabled"), &XRNode3D::is_tracking_enabled);
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "tracking_enabled"), "set_tracking_enabled", "is_tracking_enabled");
+
 	ClassDB::bind_method(D_METHOD("get_is_active"), &XRNode3D::get_is_active);
 	ClassDB::bind_method(D_METHOD("get_has_tracking_data"), &XRNode3D::get_has_tracking_data);
 	ClassDB::bind_method(D_METHOD("get_pose"), &XRNode3D::get_pose);
@@ -340,6 +376,30 @@ bool XRNode3D::get_show_when_tracked() const {
 	return show_when_tracked;
 }
 
+void XRNode3D::set_tracking_enabled(bool p_enabled) {
+	if (tracking_enabled == p_enabled) {
+		return;
+	}
+
+	// Note: we set this before (un)binding so visibility handling knows our new state.
+	tracking_enabled = p_enabled;
+
+	if (tracking_enabled) {
+		// Bind to our tracker again (if it exists) and sync up with its current pose.
+		_unbind_tracker();
+		_bind_tracker();
+	} else {
+		// Stop listening to the tracker, our transform is now ours to control.
+		_unbind_tracker();
+	}
+
+	update_configuration_warnings();
+}
+
+bool XRNode3D::is_tracking_enabled() const {
+	return tracking_enabled;
+}
+
 bool XRNode3D::get_is_active() const {
 	if (tracker.is_null()) {
 		return false;
@@ -375,6 +435,11 @@ Ref<XRPose> XRNode3D::get_pose() {
 }
 
 void XRNode3D::_bind_tracker() {
+	if (!tracking_enabled) {
+		// We've been decoupled from the XR runtime, we act like a normal Node3D.
+		return;
+	}
+
 	ERR_FAIL_COND_MSG(tracker.is_valid(), "Unbind the current tracker first");
 
 	XRServer *xr_server = XRServer::get_singleton();
@@ -456,6 +521,11 @@ void XRNode3D::_set_has_tracking_data(bool p_has_tracking_data) {
 }
 
 void XRNode3D::_update_visibility() {
+	if (!tracking_enabled) {
+		// Our visibility is ours to control while tracking is disabled.
+		return;
+	}
+
 	// If configured, show or hide the node based on tracking data.
 	if (show_when_tracked) {
 		// Only react to this if we have a primary interface.
@@ -507,12 +577,14 @@ PackedStringArray XRNode3D::get_configuration_warnings() const {
 			warnings.push_back(RTR("XRNode3D may not function as expected without an XROrigin3D node as its parent."));
 		};
 
-		if (tracker_name == "") {
-			warnings.push_back(RTR("No tracker name is set."));
-		}
+		if (tracking_enabled) {
+			if (tracker_name == "") {
+				warnings.push_back(RTR("No tracker name is set."));
+			}
 
-		if (pose_name == "") {
-			warnings.push_back(RTR("No pose is set."));
+			if (pose_name == "") {
+				warnings.push_back(RTR("No pose is set."));
+			}
 		}
 
 		if (SceneTree::is_fti_enabled_in_project() && is_physics_interpolated()) {
@@ -720,6 +792,10 @@ void XROrigin3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_current", "enabled"), &XROrigin3D::set_current);
 	ClassDB::bind_method(D_METHOD("is_current"), &XROrigin3D::is_current);
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "current"), "set_current", "is_current");
+
+	ClassDB::bind_method(D_METHOD("set_tracking_enabled", "enabled"), &XROrigin3D::set_tracking_enabled);
+	ClassDB::bind_method(D_METHOD("is_tracking_enabled"), &XROrigin3D::is_tracking_enabled);
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "tracking_enabled"), "set_tracking_enabled", "is_tracking_enabled");
 }
 
 real_t XROrigin3D::get_world_scale() const {
@@ -739,6 +815,12 @@ void XROrigin3D::set_world_scale(real_t p_world_scale) {
 }
 
 void XROrigin3D::_set_current(bool p_enabled, bool p_update_others) {
+	if (!tracking_enabled) {
+		// We've been decoupled from the XR runtime, we act like a normal Node3D and can never be current.
+		current = false;
+		return;
+	}
+
 	// We run this logic even if current already equals p_enabled as we may have set this previously before we entered our tree.
 	// This is then called a second time on NOTIFICATION_ENTER_TREE where we actually process activating this origin node.
 	current = p_enabled;
@@ -776,7 +858,7 @@ void XROrigin3D::_set_current(bool p_enabled, bool p_update_others) {
 		} else {
 			// We no longer have a current origin so find the first one we can make current
 			for (int i = 0; i < origin_nodes.size(); i++) {
-				if (origin_nodes[i] != this) {
+				if (origin_nodes[i] != this && origin_nodes[i]->tracking_enabled) {
 					origin_nodes[i]->_set_current(true, false);
 					return; // we are done.
 				}
@@ -790,12 +872,52 @@ void XROrigin3D::set_current(bool p_enabled) {
 }
 
 bool XROrigin3D::is_current() const {
-	if (Engine::get_singleton()->is_editor_hint()) {
+	if (!tracking_enabled) {
+		return false;
+	} else if (Engine::get_singleton()->is_editor_hint()) {
 		// return as is
 		return current;
 	} else {
 		return current && is_inside_tree();
 	}
+}
+
+void XROrigin3D::set_tracking_enabled(bool p_enabled) {
+	if (tracking_enabled == p_enabled) {
+		return;
+	}
+
+	if (!is_inside_tree() || Engine::get_singleton()->is_editor_hint()) {
+		tracking_enabled = p_enabled;
+		return;
+	}
+
+	if (p_enabled) {
+		tracking_enabled = true;
+
+		if (origin_nodes.is_empty()) {
+			// We're the only origin node participating in tracking, so we become current.
+			current = true;
+		}
+		origin_nodes.push_back(this);
+
+		if (current) {
+			// Set this again so we do whatever setup is needed.
+			set_current(true);
+		}
+	} else {
+		// Give up being current first, this hands it over to another origin node (if any).
+		if (current) {
+			_set_current(false, true);
+		}
+
+		tracking_enabled = false;
+		origin_nodes.erase(this);
+	}
+}
+
+bool XROrigin3D::is_tracking_enabled() const {
+	return tracking_enabled;
 }
 
 void XROrigin3D::_notification(int p_what) {
@@ -806,6 +928,12 @@ void XROrigin3D::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_ENTER_TREE: {
 			if (!Engine::get_singleton()->is_editor_hint()) {
+				if (!tracking_enabled) {
+					// We don't participate in XR tracking at all, so we never become current.
+					current = false;
+					break;
+				}
+
 				if (origin_nodes.is_empty()) {
 					// first entry always becomes current
 					current = true;
