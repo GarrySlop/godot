@@ -1158,11 +1158,24 @@ public class GLSurfaceView extends SurfaceView implements SurfaceHolder.Callback
 			 * the context is current and bound to a surface.
 			 */
 			if (!mEgl.eglMakeCurrent(mEglDisplay, mEglSurface, mEglSurface, mEglContext)) {
+				int error = mEgl.eglGetError();
+				// -- GODOT start --
+				if (error == EGL10.EGL_BAD_ACCESS) {
+					/*
+					 * The context is current on another thread. That is the expected state
+					 * when Godot renders on a separate thread: it takes ownership of the
+					 * context and presents by itself. The surface itself is valid, so we
+					 * report success, otherwise this thread would stop drawing and with it
+					 * stop driving Godot's main loop.
+					 */
+					return true;
+				}
+				// -- GODOT end --
 				/*
 				 * Could not make the context current, probably because the underlying
 				 * SurfaceView surface has been destroyed.
 				 */
-				logEglErrorAsWarning("EGLHelper", "eglMakeCurrent", mEgl.eglGetError());
+				logEglErrorAsWarning("EGLHelper", "eglMakeCurrent", error);
 				return false;
 			}
 

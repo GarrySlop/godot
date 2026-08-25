@@ -54,6 +54,7 @@
 #include "drivers/gles3/rasterizer_gles3.h"
 
 #include <EGL/egl.h>
+#include <unistd.h>
 #endif
 
 #if defined(RD_ENABLED)
@@ -500,24 +501,23 @@ int64_t DisplayServerAndroid::window_get_native_handle(DisplayServerEnums::Handl
 			return 0; // Not supported.
 		}
 #ifdef GLES3_ENABLED
-		case DisplayServerEnums::DISPLAY_HANDLE: {
+		case DisplayServerEnums::DISPLAY_HANDLE:
+		case DisplayServerEnums::EGL_DISPLAY: {
 			if (rendering_driver == "opengl3") {
-				return reinterpret_cast<int64_t>(eglGetCurrentDisplay());
+				// Cached, as the context may be current on the rendering thread rather than this one.
+				return reinterpret_cast<int64_t>(egl_display);
 			}
 			return 0;
 		}
 		case DisplayServerEnums::OPENGL_CONTEXT: {
 			if (rendering_driver == "opengl3") {
-				return reinterpret_cast<int64_t>(eglGetCurrentContext());
+				return reinterpret_cast<int64_t>(egl_context);
 			}
 			return 0;
 		}
-		case DisplayServerEnums::EGL_DISPLAY: {
-			// @todo Find a way to get this from the Java side.
-			return 0;
-		}
 		case DisplayServerEnums::EGL_CONFIG: {
-			// @todo Find a way to get this from the Java side.
+			// The EGL config is chosen on the Java side and isn't needed by any of our
+			// consumers on Android (OpenXR passes a null config per the OpenXR SDK samples).
 			return 0;
 		}
 #endif
@@ -833,6 +833,11 @@ DisplayServerAndroid::DisplayServerAndroid(const String &p_rendering_driver, Dis
 #if defined(GLES3_ENABLED)
 	if (rendering_driver == "opengl3") {
 		RasterizerGLES3::make_current(false);
+
+		// We're running on the Java rendering thread here, which is where the EGL context
+		// was made current, so this is our chance to record the handles before ownership
+		// potentially moves to Godot's rendering thread.
+		_capture_egl_state();
 	}
 #endif
 
@@ -1002,7 +1007,96 @@ bool DisplayServerAndroid::should_swap_buffers() const {
 }
 
 void DisplayServerAndroid::swap_buffers() {
+#ifdef GLES3_ENABLED
+	if (egl_owner_thread != Thread::UNASSIGNED_ID && egl_owner_thread == Thread::get_caller_id()) {
+		// We hold the context, so the Java rendering thread can no longer present on our
+		// behalf; do it here instead. In the single-threaded model nothing ever claims
+		// ownership, so we keep deferring to the Java rendering thread as before.
+		EGLDisplay display = static_cast<EGLDisplay>(egl_display);
+		EGLSurface surface = eglGetCurrentSurface(EGL_DRAW);
+		if (display != EGL_NO_DISPLAY && surface != EGL_NO_SURFACE) {
+			eglSwapBuffers(display, surface);
+		}
+		return;
+	}
+#endif
 	swap_buffers_flag = true;
+}
+
+#ifdef GLES3_ENABLED
+void DisplayServerAndroid::_capture_egl_state() {
+	egl_display = eglGetCurrentDisplay();
+	egl_context = eglGetCurrentContext();
+	egl_draw_surface = eglGetCurrentSurface(EGL_DRAW);
+	egl_read_surface = eglGetCurrentSurface(EGL_READ);
+
+	if (egl_display == EGL_NO_DISPLAY || egl_context == EGL_NO_CONTEXT) {
+		WARN_PRINT("Couldn't capture the EGL context; rendering on a separate thread will be unavailable.");
+	}
+}
+#endif
+
+void DisplayServerAndroid::gl_window_make_current(DisplayServerEnums::WindowID p_window_id) {
+#ifdef GLES3_ENABLED
+	if (rendering_driver != "opengl3" || p_window_id == DisplayServerEnums::INVALID_WINDOW_ID) {
+		return;
+	}
+
+	EGLDisplay display = static_cast<EGLDisplay>(egl_display);
+	EGLContext context = static_cast<EGLContext>(egl_context);
+	if (display == EGL_NO_DISPLAY || context == EGL_NO_CONTEXT) {
+		return;
+	}
+
+	EGLSurface draw_surface = static_cast<EGLSurface>(egl_draw_surface);
+	EGLSurface read_surface = static_cast<EGLSurface>(egl_read_surface);
+
+	if (!eglMakeCurrent(display, draw_surface, read_surface, context)) {
+		EGLint surface_error = eglGetError();
+		// The surface the Java rendering thread handed us may already be gone (it is
+		// recreated across pause/resume). A surfaceless binding is enough for OpenXR,
+		// which renders into swapchains owned by the runtime rather than to a surface.
+		if (!eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, context)) {
+			ERR_PRINT(vformat("EGL: failed to make the context current on thread %d; eglMakeCurrent errors 0x%x (with surface) and 0x%x (surfaceless).", (int)gettid(), (uint32_t)surface_error, (uint32_t)eglGetError()));
+			return;
+		}
+		egl_draw_surface = EGL_NO_SURFACE;
+		egl_read_surface = EGL_NO_SURFACE;
+	}
+
+	egl_owner_thread = Thread::get_caller_id();
+
+	// Cheap to verify and only runs on ownership changes, but a silent failure here
+	// makes every later GL call fail with no context, which is hard to trace back.
+	if (eglGetCurrentContext() != context) {
+		ERR_PRINT(vformat("EGL: context did not become current on thread %d despite eglMakeCurrent reporting success.", (int)gettid()));
+	} else {
+		print_verbose(vformat("EGL: context is now current on thread %d (surfaceless: %s).", (int)gettid(), egl_draw_surface == EGL_NO_SURFACE ? "yes" : "no"));
+	}
+#endif
+}
+
+void DisplayServerAndroid::release_rendering_thread() {
+#ifdef GLES3_ENABLED
+	if (rendering_driver != "opengl3") {
+		return;
+	}
+
+	EGLDisplay display = static_cast<EGLDisplay>(egl_display);
+	if (display == EGL_NO_DISPLAY) {
+		return;
+	}
+
+	// Unbinds the context from whichever thread is calling us, so that it can be picked
+	// up elsewhere. Called on the main thread to hand it over to the rendering thread,
+	// and on the rendering thread when it shuts down.
+	eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+	print_verbose(vformat("EGL: context released by thread %d.", (int)gettid()));
+
+	if (egl_owner_thread == Thread::get_caller_id()) {
+		egl_owner_thread = Thread::UNASSIGNED_ID;
+	}
+#endif
 }
 
 void DisplayServerAndroid::set_native_icon(const String &p_filename) {

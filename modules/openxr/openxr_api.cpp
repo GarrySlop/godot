@@ -38,14 +38,12 @@
 #include "core/config/project_settings.h"
 #include "core/object/callable_mp.h"
 #include "core/os/memory.h"
+#include "core/os/os.h"
 #include "core/profiling/profiling.h"
 #include "core/version.h"
+#include "servers/display/display_server.h"
 #include "servers/rendering/rendering_server.h"
 #include "servers/rendering/rendering_server_globals.h"
-
-#ifdef ANDROID_ENABLED
-#include "core/os/os.h"
-#endif
 
 #include "openxr_platform_inc.h" // IWYU pragma: keep.
 
@@ -932,9 +930,61 @@ void OpenXRAPI::destroy_instance() {
 	}
 }
 
+namespace {
+
+void _release_gl_context_on_render_thread() {
+	DisplayServer::get_singleton()->release_rendering_thread();
+}
+
+void _make_gl_context_current_on_render_thread() {
+	DisplayServer::get_singleton()->gl_window_make_current(DisplayServerEnums::MAIN_WINDOW_ID);
+}
+
+// The OpenXR specification requires that the OpenGL context passed to xrCreateSession is
+// not bound in another thread while the session is created or destroyed. Frame and
+// swapchain calls carry the same requirement, but those already run on the rendering
+// thread. When rendering runs on its own thread it is that thread which holds the
+// context, so we borrow it back for the duration of session setup and teardown.
+class BorrowedGLContext {
+	bool active = false;
+
+public:
+	explicit BorrowedGLContext(bool p_uses_opengl) {
+		if (!p_uses_opengl || !OS::get_singleton()->is_separate_thread_rendering_enabled()) {
+			return;
+		}
+
+		RenderingServer *rendering_server = RenderingServer::get_singleton();
+		if (rendering_server == nullptr || rendering_server->is_on_render_thread()) {
+			return;
+		}
+
+		active = true;
+		rendering_server->call_on_render_thread(callable_mp_static(&_release_gl_context_on_render_thread));
+		rendering_server->sync();
+		DisplayServer::get_singleton()->gl_window_make_current(DisplayServerEnums::MAIN_WINDOW_ID);
+	}
+
+	~BorrowedGLContext() {
+		if (!active) {
+			return;
+		}
+
+		DisplayServer::get_singleton()->release_rendering_thread();
+
+		RenderingServer *rendering_server = RenderingServer::get_singleton();
+		rendering_server->call_on_render_thread(callable_mp_static(&_make_gl_context_current_on_render_thread));
+		rendering_server->sync();
+	}
+};
+
+} // namespace
+
 bool OpenXRAPI::create_session() {
 	ERR_FAIL_COND_V(instance == XR_NULL_HANDLE, false);
 	ERR_FAIL_COND_V(session != XR_NULL_HANDLE, false);
+
+	BorrowedGLContext gl_context(uses_opengl);
 
 	void *next_pointer = nullptr;
 	for (OpenXRExtensionWrapper *wrapper : registered_extension_wrappers) {
@@ -1368,6 +1418,8 @@ bool OpenXRAPI::create_main_swapchains(const Size2i &p_size) {
 }
 
 void OpenXRAPI::destroy_session() {
+	BorrowedGLContext gl_context(uses_opengl);
+
 	// TODO need to figure out if we're still rendering our current frame
 	// in a separate rendering thread and if so,
 	// if we need to wait for completion.
@@ -1732,6 +1784,7 @@ bool OpenXRAPI::initialize(const String &p_rendering_driver) {
 #if defined(GLES3_ENABLED) && !defined(MACOS_ENABLED)
 		graphics_extension = memnew(OpenXROpenGLExtension);
 		register_extension_wrapper(graphics_extension);
+		uses_opengl = true;
 #else
 		// shouldn't be possible...
 		ERR_FAIL_V(false);

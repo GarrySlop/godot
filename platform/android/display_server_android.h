@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include "core/os/thread.h"
 #include "servers/display/display_server.h"
 
 class InputEvent;
@@ -75,6 +76,23 @@ class DisplayServerAndroid : public DisplayServer {
 
 	bool keep_screen_on;
 	bool swap_buffers_flag;
+
+#ifdef GLES3_ENABLED
+	// EGL resources are created by the Java rendering thread, which is also Godot's
+	// main thread on Android. When the "Separate" thread model is used, ownership of
+	// the context is handed over to Godot's rendering thread, at which point
+	// eglGetCurrent*() no longer returns anything usable on the main thread, so we
+	// cache the handles here while they are still reachable.
+	void *egl_display = nullptr;
+	void *egl_context = nullptr;
+	void *egl_draw_surface = nullptr;
+	void *egl_read_surface = nullptr;
+	// Thread the context is currently bound to, or UNASSIGNED_ID while Java's rendering
+	// thread still owns it (in which case that thread also presents on our behalf).
+	Thread::ID egl_owner_thread = Thread::UNASSIGNED_ID;
+
+	void _capture_egl_state();
+#endif
 
 	DisplayServerEnums::CursorShape cursor_shape = DisplayServerEnums::CursorShape::CURSOR_ARROW;
 
@@ -263,6 +281,9 @@ public:
 	void reset_swap_buffers_flag();
 	bool should_swap_buffers() const;
 	virtual void swap_buffers() override;
+
+	virtual void gl_window_make_current(DisplayServerEnums::WindowID p_window_id) override;
+	virtual void release_rendering_thread() override;
 
 	virtual void set_native_icon(const String &p_filename) override;
 	virtual void set_icon(const Ref<Image> &p_icon) override;

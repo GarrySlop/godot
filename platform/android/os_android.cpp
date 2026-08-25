@@ -392,10 +392,16 @@ bool OS_Android::main_loop_iterate(bool *r_should_swap_buffers) {
 	bool exit = Main::iteration();
 
 	if (r_should_swap_buffers) {
-		*r_should_swap_buffers = !is_in_low_processor_usage_mode() ||
-				dsa->should_swap_buffers() ||
-				RenderingServer::get_singleton()->has_changed() ||
-				current_frames_drawn != Engine::get_singleton()->get_frames_drawn();
+		if (is_separate_thread_rendering_enabled()) {
+			// Presentation is driven by Godot's rendering thread, which owns the context;
+			// the Java rendering thread must not touch it.
+			*r_should_swap_buffers = false;
+		} else {
+			*r_should_swap_buffers = !is_in_low_processor_usage_mode() ||
+					dsa->should_swap_buffers() ||
+					RenderingServer::get_singleton()->has_changed() ||
+					current_frames_drawn != Engine::get_singleton()->get_frames_drawn();
+		}
 	}
 
 	return exit;

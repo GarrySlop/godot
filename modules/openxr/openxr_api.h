@@ -151,6 +151,7 @@ private:
 
 	OpenXRGraphicsExtensionWrapper *graphics_extension = nullptr;
 	XrSystemGraphicsProperties graphics_properties;
+	bool uses_opengl = false;
 
 	LocalVector<XrViewConfigurationView> view_configuration_views;
 

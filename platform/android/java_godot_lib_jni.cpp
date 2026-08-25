@@ -289,9 +289,18 @@ JNIEXPORT void JNICALL Java_org_godotengine_godot_GodotLib_ttsCallback(JNIEnv *e
 	TTS_Android::_java_utterance_callback(event, id, pos);
 }
 
+// When rendering runs on a separate thread, that thread owns the GL context and presents
+// by itself, so the Java rendering thread must never try to swap buffers: doing so without
+// a current context fails and makes it give up on the surface, which would stall the main
+// loop it is driving.
+static bool _java_thread_should_swap_buffers() {
+	const OS *os = OS::get_singleton();
+	return os == nullptr || !os->is_separate_thread_rendering_enabled();
+}
+
 JNIEXPORT jboolean JNICALL Java_org_godotengine_godot_GodotLib_step(JNIEnv *env, jclass clazz) {
 	if (step.get() == STEP_TERMINATED) {
-		return true;
+		return _java_thread_should_swap_buffers();
 	}
 
 	if (step.get() == STEP_SETUP) {
@@ -306,7 +315,7 @@ JNIEXPORT jboolean JNICALL Java_org_godotengine_godot_GodotLib_step(JNIEnv *env,
 		}
 		input_handler = new AndroidInputHandler();
 		step.increment();
-		return true;
+		return _java_thread_should_swap_buffers();
 	}
 
 	if (step.get() == STEP_SHOW_LOGO) {
@@ -325,7 +334,7 @@ JNIEXPORT jboolean JNICALL Java_org_godotengine_godot_GodotLib_step(JNIEnv *env,
 		}
 
 		step.increment();
-		return true;
+		return _java_thread_should_swap_buffers();
 	}
 
 	if (step.get() == STEP_STARTED) {
