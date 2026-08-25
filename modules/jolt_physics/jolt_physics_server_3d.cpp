@@ -1295,6 +1295,27 @@ Vector<Vector3> JoltPhysicsServer3D::rope_get_points(RID p_rope) const {
 	return rope->get_points();
 }
 
+Vector<Vector3> JoltPhysicsServer3D::rope_get_point_normals(RID p_rope) const {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL_V(rope, Vector<Vector3>());
+
+	return rope->get_point_normals();
+}
+
+Vector<Vector3> JoltPhysicsServer3D::rope_get_points_interpolated(RID p_rope, float p_fraction) const {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL_V(rope, Vector<Vector3>());
+
+	return rope->get_points_interpolated(p_fraction);
+}
+
+void JoltPhysicsServer3D::rope_reset_interpolation(RID p_rope) {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL(rope);
+
+	rope->reset_interpolation();
+}
+
 int JoltPhysicsServer3D::rope_get_point_count(RID p_rope) const {
 	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
 	ERR_FAIL_NULL_V(rope, 0);
@@ -1460,6 +1481,34 @@ void JoltPhysicsServer3D::rope_detach_point(RID p_rope, int p_point_index) {
 	ERR_FAIL_NULL(rope);
 
 	rope->detach_point(p_point_index);
+}
+
+void JoltPhysicsServer3D::rope_set_attachment_flag(RID p_rope, int p_point_index, RopeAttachmentFlag p_flag, bool p_enabled) {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL(rope);
+
+	rope->set_attachment_flag(p_point_index, p_flag, p_enabled);
+}
+
+bool JoltPhysicsServer3D::rope_get_attachment_flag(RID p_rope, int p_point_index, RopeAttachmentFlag p_flag) const {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL_V(rope, false);
+
+	return rope->get_attachment_flag(p_point_index, p_flag);
+}
+
+void JoltPhysicsServer3D::rope_set_attachment_param(RID p_rope, int p_point_index, RopeAttachmentParam p_param, float p_value) {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL(rope);
+
+	rope->set_attachment_param(p_point_index, p_param, p_value);
+}
+
+float JoltPhysicsServer3D::rope_get_attachment_param(RID p_rope, int p_point_index, RopeAttachmentParam p_param) const {
+	JoltRope3D *rope = rope_owner.get_or_null(p_rope);
+	ERR_FAIL_NULL_V(rope, 0.0f);
+
+	return rope->get_attachment_param(p_point_index, p_param);
 }
 
 void JoltPhysicsServer3D::rope_remove_all_attachments(RID p_rope) {

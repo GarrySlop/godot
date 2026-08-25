@@ -1084,6 +1084,24 @@
 			<description>
 			</description>
 		</method>
+		<method name="rope_get_attachment_flag" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="point_index" type="int" />
+			<param index="2" name="flag" type="int" enum="PhysicsServer3D.RopeAttachmentFlag" />
+			<description>
+				Returns a rope attachment flag, or [code]false[/code] if no attachment or pin holds [param point_index].
+			</description>
+		</method>
+		<method name="rope_get_attachment_param" qualifiers="const">
+			<return type="float" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="point_index" type="int" />
+			<param index="2" name="param" type="int" enum="PhysicsServer3D.RopeAttachmentParam" />
+			<description>
+				Returns a rope attachment parameter, or [code]0.0[/code] if no attachment or pin holds [param point_index].
+			</description>
+		</method>
 		<method name="rope_get_bounds" qualifiers="const">
 			<return type="AABB" />
 			<param index="0" name="rope" type="RID" />
@@ -1129,6 +1147,14 @@
 			<description>
 			</description>
 		</method>
+		<method name="rope_get_point_normals" qualifiers="const">
+			<return type="PackedVector3Array" />
+			<param index="0" name="rope" type="RID" />
+			<description>
+				Returns one unit vector per rope point, perpendicular to the rope at that point.
+				These make up the rope's material frame. They are rotation-minimising along its length and stable from one frame to the next, so a mesh built on them neither swims around the rope's axis as it moves nor snaps as it passes through an awkward orientation. When torsion is switched on with [constant ROPE_PARAM_TWIST_COMPLIANCE] they carry the twist the solver is actually simulating.
+			</description>
+		</method>
 		<method name="rope_get_point_position" qualifiers="const">
 			<return type="Vector3" />
 			<param index="0" name="rope" type="RID" />
@@ -1147,6 +1173,15 @@
 			<return type="PackedVector3Array" />
 			<param index="0" name="rope" type="RID" />
 			<description>
+			</description>
+		</method>
+		<method name="rope_get_points_interpolated" qualifiers="const">
+			<return type="PackedVector3Array" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="fraction" type="float" />
+			<description>
+				Returns the rope's pose [param fraction] of the way from the previous physics step to the current one.
+				Vertex data is not something the renderer can interpolate, so a rope drawn from its current pose sits up to a whole physics step ahead of every physics-interpolated object around it, by an amount that changes each rendered frame. Drawing from this instead puts the rope back in step with them. Falls back to the current pose when there is no history to interpolate from.
 			</description>
 		</method>
 		<method name="rope_get_simulation_substeps" qualifiers="const">
@@ -1187,6 +1222,33 @@
 			<param index="0" name="rope" type="RID" />
 			<param index="1" name="body" type="RID" />
 			<description>
+			</description>
+		</method>
+		<method name="rope_reset_interpolation">
+			<return type="void" />
+			<param index="0" name="rope" type="RID" />
+			<description>
+				Drops the rope's interpolation history, so a rope that has been teleported or respawned is drawn at its new pose rather than smeared across the jump.
+			</description>
+		</method>
+		<method name="rope_set_attachment_flag">
+			<return type="void" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="point_index" type="int" />
+			<param index="2" name="flag" type="int" enum="PhysicsServer3D.RopeAttachmentFlag" />
+			<param index="3" name="enabled" type="bool" />
+			<description>
+				Sets a rope attachment flag. Does nothing if no attachment or pin holds [param point_index].
+			</description>
+		</method>
+		<method name="rope_set_attachment_param">
+			<return type="void" />
+			<param index="0" name="rope" type="RID" />
+			<param index="1" name="point_index" type="int" />
+			<param index="2" name="param" type="int" enum="PhysicsServer3D.RopeAttachmentParam" />
+			<param index="3" name="value" type="float" />
+			<description>
+				Sets a rope attachment parameter. Does nothing if no attachment or pin holds [param point_index].
 			</description>
 		</method>
 		<method name="rope_set_collision_layer">
@@ -1739,7 +1801,34 @@
 		<constant name="ROPE_PARAM_LENGTH" value="10" enum="RopeParameter">
 			Total rest length of the rope. Zero means derive it from the spacing of the points passed to [method rope_set_points], which is the behaviour when no length is requested.
 		</constant>
-		<constant name="ROPE_PARAM_MAX" value="11" enum="RopeParameter">
+		<constant name="ROPE_PARAM_TWIST_COMPLIANCE" value="11" enum="RopeParameter">
+			Torsional compliance, in radians per newton-metre: how readily the rope winds about its own axis. Low values are a stiff cable, high values a rope that offers no resistance at all.
+			This only does anything between two points whose rotation is constrained — see [constant ROPE_ATTACHMENT_LOCK_TWIST]. With one end free the rope simply turns as a whole, which is correct.
+		</constant>
+		<constant name="ROPE_PARAM_TWIST_DAMPING" value="12" enum="RopeParameter">
+			Damping applied to the twist degree of freedom alone, so torsional ringing settles without affecting how the rope moves through space.
+		</constant>
+		<constant name="ROPE_PARAM_MAX" value="13" enum="RopeParameter">
+		</constant>
+		<constant name="ROPE_ATTACHMENT_LOCK_TWIST" value="0" enum="RopeAttachmentFlag">
+			Welds the rope's roll about its own axis to whatever holds the attachment. This is what stops a load hanging on a rope from spinning freely forever.
+			Requires [constant ROPE_PARAM_TWIST_COMPLIANCE] to be below its disabled value, and needs to be set at [i]both[/i] ends of the span: with only one end locked, the rope and whatever hangs from it simply turn together.
+		</constant>
+		<constant name="ROPE_ATTACHMENT_LOCK_DIRECTION" value="1" enum="RopeAttachmentFlag">
+			Welds the direction the rope leaves the attachment in, so it behaves like a cable gland or a splice rather than a hook. Unlike [constant ROPE_ATTACHMENT_LOCK_TWIST] this is a bending constraint and works with torsion switched off.
+		</constant>
+		<constant name="ROPE_ATTACHMENT_SOLVER_LIMIT" value="2" enum="RopeAttachmentFlag">
+			Hands this attachment's reach limit to the physics solver as a real constraint, rather than the rope enforcing it after the solver has finished.
+			Needed whenever the load reaches the attached body through another joint, since a constraint on that body is re-solved from scratch each step and overwrites anything the rope wrote. The cost is that the solver's constraint does not anticipate the arc a swinging body travels, so it bleeds energy from a free swing. Off by default. See [member RopeAttachment3D.solver_limit].
+		</constant>
+		<constant name="ROPE_ATTACHMENT_FLAG_MAX" value="3" enum="RopeAttachmentFlag">
+			Represents the size of the [enum RopeAttachmentFlag] enum.
+		</constant>
+		<constant name="ROPE_ATTACHMENT_PARAM_DIRECTION_COMPLIANCE" value="0" enum="RopeAttachmentParam">
+			How softly [constant ROPE_ATTACHMENT_LOCK_DIRECTION] holds, in radians per newton-metre. [code]0.0[/code] is a rigid weld; larger values let the rope bend away from its fastened direction under load.
+		</constant>
+		<constant name="ROPE_ATTACHMENT_PARAM_MAX" value="1" enum="RopeAttachmentParam">
+			Represents the size of the [enum RopeAttachmentParam] enum.
 		</constant>
 		<constant name="ROPE_FLAG_INEXTENSIBLE" value="0" enum="RopeFlag">
 		</constant>

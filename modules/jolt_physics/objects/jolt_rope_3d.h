@@ -46,6 +46,7 @@
 #include <Jolt/Jolt.h>
 
 #include <Jolt/Physics/Body/BodyID.h>
+#include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
 
 class JoltBody3D;
 class JoltSpace3D;
@@ -86,11 +87,56 @@ public:
 		int collider = -1;
 		bool soft = false;
 
+		// Optional orientation locks. Both default off, so an attachment stays a plain ball joint
+		// unless asked otherwise.
+		bool lock_twist = false;
+		bool lock_direction = false;
+		float direction_compliance = 0.0f;
+		bool solver_limit = false;
+
+		// Captured the first frame a lock is solved, in the frame of whatever holds it -- body-local
+		// for a body, world for a static pin. Capturing rather than prescribing is the whole point:
+		// the rope is fastened in the pose it already has, so switching a lock on never jerks it.
+		Vector3 locked_normal;
+		Vector3 locked_direction;
+		bool twist_captured = false;
+		bool direction_captured = false;
+
+		// The frame the locks are expressed in, refreshed once per frame: the body's basis for a body
+		// attachment, identity (i.e. world) for a static pin.
+		Basis holder_basis;
+
+		// Refreshed once per frame by `_update_twist_targets()`. `twist_target` is deliberately
+		// unbounded -- a rope wound up three turns is not the same as one at rest, so it must not be
+		// stored modulo a full turn.
+		int twist_segment = -1;
+		real_t twist_target = 0.0f;
+		bool twist_locked = false;
+
 		// The nearest genuinely immovable anchor along the rope, and the total rest length between
 		// the two. A body attachment can never be further from that anchor than this, which is what
 		// makes the rope act as a limit joint on the body it is tied to.
 		int limit_anchor = -1;
 		float limit_distance = 0.0f;
+
+		// That limit, handed to Jolt as a real constraint.
+		//
+		// The rope itself runs after Jolt has finished stepping, so everything else it does to a body
+		// is a velocity written after the fact. That is fine when the body is the load -- it holds
+		// perfectly. It is not fine when the load reaches the body through *another* Jolt constraint,
+		// because that constraint is re-solved from scratch on the next step and simply overwrites
+		// whatever the rope wrote. Measured: a 1 kg hand tied to a rope holds its own weight
+		// indefinitely, and slides 4.8 m in five seconds the moment a 16 kg body is hung off it
+		// through a spring joint.
+		//
+		// A real constraint puts the load path in the same solver iteration as everything else acting
+		// on that body, which is the only way the two can agree.
+		JPH::Ref<JPH::TwoBodyConstraint> limit_constraint;
+		JPH::BodyID limit_constraint_body;
+		JPH::BodyID limit_constraint_anchor_body;
+		Vector3 limit_constraint_point;
+		Vector3 limit_constraint_offset;
+		float limit_constraint_distance = -1.0f;
 	};
 
 private:
@@ -120,6 +166,21 @@ private:
 		Vector3 position_delta;
 		Vector3 rotation_delta;
 
+		// The constraint impulse the rope owes this body over the frame, linear (N*s) and angular
+		// (N*m*s). Deliberately separate from the positional proxy above, because the two answer
+		// different questions: the proxy records where our corrections have already moved the body,
+		// so the next substep does not ask for the same correction twice, while this records what
+		// actually has to be handed back to Jolt.
+		//
+		// Accumulating impulse rather than displacement is what makes the reaction independent of
+		// `substeps`. XPBD's constraint force is `lambda / h^2`, so its impulse over one substep is
+		// `lambda / h`; summing that over `n` substeps of `h = H / n` gives the same total however
+		// finely the frame is divided. Summing the displacements instead does not -- a constraint
+		// under sustained load leaves a residual every substep, so the sum grew with the substep
+		// count and the rope transmitted more force the more accurately it was solved.
+		Vector3 linear_impulse;
+		Vector3 angular_impulse;
+
 		// Where a point that started the frame at `p_world` has been moved to by our corrections.
 		Vector3 displaced(const Vector3 &p_world) const {
 			return p_world + position_delta + rotation_delta.cross(p_world - com);
@@ -144,6 +205,11 @@ private:
 	// particle arrays, `bend_lambdas` two entries shorter.
 	LocalVector<Vector3> positions;
 	LocalVector<Vector3> prev_positions;
+	// The pose at the end of the *previous* physics step, kept purely so the rope can be drawn
+	// interpolated. `prev_positions` above is per-substep and is the solver's own working state; this
+	// one spans a whole frame, which is the interval the renderer interpolates over.
+	LocalVector<Vector3> render_positions;
+	bool render_positions_valid = false;
 	LocalVector<Vector3> velocities;
 	LocalVector<float> inv_masses;
 	LocalVector<float> base_inv_masses;
@@ -157,6 +223,37 @@ private:
 	// through Jolt's system gravity (which `JoltSpace3D` zeroes), and `compute_gravity()` is
 	// position-dependent so that point gravity works.
 	LocalVector<Vector3> gravity_cache;
+
+	// Twist: the material frame's roll about each segment's own tangent, measured from `ref_normals`
+	// below, plus its rate. One scalar per segment is the whole degree of freedom -- this is the
+	// reduced-coordinate rod of Bergou et al., *Discrete Elastic Rods*, where the centreline lives in
+	// `positions` and the frame is a parallel-transported reference plus an angle.
+	//
+	// Because adjacent reference frames are parallel-transported from one another, the holonomy
+	// between them is zero by construction and the twist constraint is simply the difference of two
+	// neighbouring angles. What that trade gives up is bend-twist coupling: this rope stores and
+	// transmits torsion, but it will not buckle into a coil the way a real over-twisted cable does.
+	LocalVector<float> twist_angles;
+	LocalVector<float> twist_velocities;
+
+	// Scratch for the tridiagonal solve, kept as members so the solve allocates nothing.
+	LocalVector<float> twist_scratch_c;
+	LocalVector<float> twist_scratch_d;
+	LocalVector<float> twist_predicted;
+
+	// The rope's material frame: one reference normal per segment, plus the tangent it was last
+	// built against. This is the frame the tube's surface is drawn with, and once twist exists it is
+	// also what twist is measured from.
+	//
+	// The important property is that it is carried *across frames*. Deriving it fresh each frame from
+	// an arbitrary perpendicular is spatially fine but temporally not: the seed rotates with the
+	// rope's first tangent, so the whole surface rolls about its own axis as the rope swings, and a
+	// seed that switches reference axis at a threshold makes it snap outright. Only segment 0 is
+	// carried in time; the rest is parallel-transported along the rope from it, which keeps adjacent
+	// segments in agreement and makes the holonomy between them zero by construction.
+	LocalVector<Vector3> ref_normals;
+	LocalVector<Vector3> ref_tangents;
+	bool ref_frame_valid = false;
 
 	// Long-range attachment: for each particle, the nearest anchor and the total rest length
 	// between them. A particle can never be further from its anchor than that, which enforces
@@ -178,16 +275,19 @@ private:
 	uint32_t collision_mask = 1;
 
 	int substeps = 4;
-	// Duration of the whole physics frame. Positional corrections are turned into impulses with
-	// this rather than the substep duration: Jolt has already integrated the bodies across the full
-	// frame before the rope runs, so the displacement a correction undoes accumulated over that
-	// frame. Dividing by the substep would overstate every reaction by `substeps` times.
+	// Duration of the whole physics frame. The positional half of a reaction is a drift corrector,
+	// not a force: it removes an error that accumulated over the frame Jolt already integrated, so it
+	// is spread over that frame. Dividing by the substep instead would scale every reaction with
+	// `substeps`, because a one-shot error is cleared by the first substep and the remaining ones
+	// contribute nothing to average it back down.
 	float frame_step = 0.0f;
 
 	float radius = 0.05f;
 	float total_mass = 1.0f;
 	float stretch_compliance = 0.0f;
 	float bend_compliance = 1e9f;
+	float twist_compliance = 1e9f;
+	float twist_damping = 0.5f;
 	float linear_damping = 0.1f;
 	float drag = 1.0f;
 	float gravity_scale = 1.0f;
@@ -205,20 +305,31 @@ private:
 	void _update_rest_lengths();
 	void _update_lra();
 	void _update_attachment_targets();
+	void _update_limit_constraint(Attachment &p_attachment, const Attachment *p_anchor);
+	void _release_limit_constraint(Attachment &p_attachment);
+	void _release_all_limit_constraints();
 	void _update_bounds();
 	void _update_gravity();
+	void _update_frames();
+	void _update_twist_targets();
+	void _solve_twist(float p_step);
 
 	void _gather_contacts(float p_step);
 	int _resolve_collider(const JPH::BodyID &p_body_id);
 
+	void _solve_damping(float p_step);
 	void _integrate(float p_step);
 	void _solve_distance(float p_step);
 	void _solve_bending(float p_step);
 	void _solve_lra();
 	void _solve_strain_limit();
 	void _solve_attachments(float p_step);
+	void _solve_direction_lock(Attachment &p_attachment, int p_index, float p_step);
+	void _carry_locks(Attachment &p_attachment, int p_index, AttachMode p_mode, const RID &p_body_rid);
 	void _solve_collisions(float p_step);
 	void _update_velocities(float p_step);
+	void _solve_velocities();
+	void _finalize_reactions();
 	void _apply_reactions();
 
 public:
@@ -271,12 +382,30 @@ public:
 
 	void attach_point_to_body(int p_index, RID p_body_rid, JoltBody3D *p_body, const Vector3 &p_local_offset);
 	void detach_point(int p_index);
+
+	void set_attachment_flag(int p_index, PhysicsServer3D::RopeAttachmentFlag p_flag, bool p_enabled);
+	bool get_attachment_flag(int p_index, PhysicsServer3D::RopeAttachmentFlag p_flag) const;
+
+	void set_attachment_param(int p_index, PhysicsServer3D::RopeAttachmentParam p_param, float p_value);
+	float get_attachment_param(int p_index, PhysicsServer3D::RopeAttachmentParam p_param) const;
 	void remove_all_attachments();
 	// Called when a body is freed, so attachments never keep a dangling pointer.
 	void detach_from_body(RID p_body_rid);
 
 	void apply_point_impulse(int p_index, const Vector3 &p_impulse);
 	void apply_central_impulse(const Vector3 &p_impulse);
+
+	// One per particle, perpendicular to the rope there. Rotation-minimising and stable over time, so
+	// a mesh built from it does not swim or snap as the rope moves.
+	Vector<Vector3> get_point_normals() const;
+
+	// The pose `p_fraction` of the way from the previous physics step to the current one. This is what
+	// a physics-interpolated scene needs: everything else in it is drawn between the last two steps,
+	// so a rope drawn at the current one is out of step with all of it.
+	Vector<Vector3> get_points_interpolated(float p_fraction) const;
+	// Drops the interpolation history, so a rope that has been teleported or respawned does not smear
+	// across the jump.
+	void reset_interpolation();
 
 	AABB get_bounds() const { return bounds; }
 

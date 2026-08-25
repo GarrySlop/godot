@@ -918,6 +918,9 @@ void PhysicsServer3D::_bind_methods() {
 
 	ClassDB::bind_method(D_METHOD("rope_set_points", "rope", "points"), &PhysicsServer3D::rope_set_points);
 	ClassDB::bind_method(D_METHOD("rope_get_points", "rope"), &PhysicsServer3D::rope_get_points);
+	ClassDB::bind_method(D_METHOD("rope_get_point_normals", "rope"), &PhysicsServer3D::rope_get_point_normals);
+	ClassDB::bind_method(D_METHOD("rope_get_points_interpolated", "rope", "fraction"), &PhysicsServer3D::rope_get_points_interpolated);
+	ClassDB::bind_method(D_METHOD("rope_reset_interpolation", "rope"), &PhysicsServer3D::rope_reset_interpolation);
 	ClassDB::bind_method(D_METHOD("rope_get_point_count", "rope"), &PhysicsServer3D::rope_get_point_count);
 
 	ClassDB::bind_method(D_METHOD("rope_get_point_position", "rope", "point_index"), &PhysicsServer3D::rope_get_point_position);
@@ -949,6 +952,10 @@ void PhysicsServer3D::_bind_methods() {
 
 	ClassDB::bind_method(D_METHOD("rope_attach_point_to_body", "rope", "point_index", "body", "local_offset"), &PhysicsServer3D::rope_attach_point_to_body);
 	ClassDB::bind_method(D_METHOD("rope_detach_point", "rope", "point_index"), &PhysicsServer3D::rope_detach_point);
+	ClassDB::bind_method(D_METHOD("rope_set_attachment_flag", "rope", "point_index", "flag", "enabled"), &PhysicsServer3D::rope_set_attachment_flag);
+	ClassDB::bind_method(D_METHOD("rope_get_attachment_flag", "rope", "point_index", "flag"), &PhysicsServer3D::rope_get_attachment_flag);
+	ClassDB::bind_method(D_METHOD("rope_set_attachment_param", "rope", "point_index", "param", "value"), &PhysicsServer3D::rope_set_attachment_param);
+	ClassDB::bind_method(D_METHOD("rope_get_attachment_param", "rope", "point_index", "param"), &PhysicsServer3D::rope_get_attachment_param);
 	ClassDB::bind_method(D_METHOD("rope_remove_all_attachments", "rope"), &PhysicsServer3D::rope_remove_all_attachments);
 
 	ClassDB::bind_method(D_METHOD("rope_apply_point_impulse", "rope", "point_index", "impulse"), &PhysicsServer3D::rope_apply_point_impulse);
@@ -967,7 +974,17 @@ void PhysicsServer3D::_bind_methods() {
 	BIND_ENUM_CONSTANT(ROPE_PARAM_RESTITUTION);
 	BIND_ENUM_CONSTANT(ROPE_PARAM_MAX_REACTION_IMPULSE);
 	BIND_ENUM_CONSTANT(ROPE_PARAM_LENGTH);
+	BIND_ENUM_CONSTANT(ROPE_PARAM_TWIST_COMPLIANCE);
+	BIND_ENUM_CONSTANT(ROPE_PARAM_TWIST_DAMPING);
 	BIND_ENUM_CONSTANT(ROPE_PARAM_MAX);
+
+	BIND_ENUM_CONSTANT(ROPE_ATTACHMENT_LOCK_TWIST);
+	BIND_ENUM_CONSTANT(ROPE_ATTACHMENT_LOCK_DIRECTION);
+	BIND_ENUM_CONSTANT(ROPE_ATTACHMENT_SOLVER_LIMIT);
+	BIND_ENUM_CONSTANT(ROPE_ATTACHMENT_FLAG_MAX);
+
+	BIND_ENUM_CONSTANT(ROPE_ATTACHMENT_PARAM_DIRECTION_COMPLIANCE);
+	BIND_ENUM_CONSTANT(ROPE_ATTACHMENT_PARAM_MAX);
 
 	BIND_ENUM_CONSTANT(ROPE_FLAG_INEXTENSIBLE);
 	BIND_ENUM_CONSTANT(ROPE_FLAG_TWO_WAY_COUPLING);

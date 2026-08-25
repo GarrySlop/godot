@@ -130,6 +130,43 @@ void RopeAttachment3D::set_ratio(float p_ratio) {
 	_notify_rope();
 }
 
+void RopeAttachment3D::set_lock_twist(bool p_enabled) {
+	if (lock_twist == p_enabled) {
+		return;
+	}
+
+	lock_twist = p_enabled;
+	_notify_rope();
+}
+
+void RopeAttachment3D::set_lock_direction(bool p_enabled) {
+	if (lock_direction == p_enabled) {
+		return;
+	}
+
+	lock_direction = p_enabled;
+	_notify_rope();
+}
+
+void RopeAttachment3D::set_solver_limit(bool p_enabled) {
+	if (solver_limit == p_enabled) {
+		return;
+	}
+
+	solver_limit = p_enabled;
+	_notify_rope();
+}
+
+void RopeAttachment3D::set_direction_compliance(float p_compliance) {
+	const float clamped = MAX(p_compliance, 0.0f);
+	if (Math::is_equal_approx(direction_compliance, clamped)) {
+		return;
+	}
+
+	direction_compliance = clamped;
+	_notify_rope();
+}
+
 PackedStringArray RopeAttachment3D::get_configuration_warnings() const {
 	PackedStringArray warnings = Node3D::get_configuration_warnings();
 
@@ -149,8 +186,26 @@ void RopeAttachment3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_ratio", "ratio"), &RopeAttachment3D::set_ratio);
 	ClassDB::bind_method(D_METHOD("get_ratio"), &RopeAttachment3D::get_ratio);
 
+	ClassDB::bind_method(D_METHOD("set_lock_twist", "enabled"), &RopeAttachment3D::set_lock_twist);
+	ClassDB::bind_method(D_METHOD("get_lock_twist"), &RopeAttachment3D::get_lock_twist);
+
+	ClassDB::bind_method(D_METHOD("set_lock_direction", "enabled"), &RopeAttachment3D::set_lock_direction);
+	ClassDB::bind_method(D_METHOD("get_lock_direction"), &RopeAttachment3D::get_lock_direction);
+
+	ClassDB::bind_method(D_METHOD("set_direction_compliance", "compliance"), &RopeAttachment3D::set_direction_compliance);
+	ClassDB::bind_method(D_METHOD("get_direction_compliance"), &RopeAttachment3D::get_direction_compliance);
+
+	ClassDB::bind_method(D_METHOD("set_solver_limit", "enabled"), &RopeAttachment3D::set_solver_limit);
+	ClassDB::bind_method(D_METHOD("get_solver_limit"), &RopeAttachment3D::get_solver_limit);
+
 	ClassDB::bind_method(D_METHOD("get_attached_body"), &RopeAttachment3D::get_attached_body);
 
 	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "rope", PROPERTY_HINT_NODE_PATH_VALID_TYPES, "RopeBody3D"), "set_rope", "get_rope");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ratio", PROPERTY_HINT_RANGE, "0,1,0.001"), "set_ratio", "get_ratio");
+
+	ADD_GROUP("Lock", "");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "lock_twist"), "set_lock_twist", "get_lock_twist");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "lock_direction"), "set_lock_direction", "get_lock_direction");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "direction_compliance", PROPERTY_HINT_RANGE, "0,1,0.0001,exp"), "set_direction_compliance", "get_direction_compliance");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "solver_limit"), "set_solver_limit", "get_solver_limit");
 }

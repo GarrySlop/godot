@@ -164,6 +164,14 @@ void RopeBody3D::_notification(int p_what) {
 			_rebuild_points();
 		} break;
 
+		case NOTIFICATION_RESET_PHYSICS_INTERPOLATION: {
+			// A teleported or freshly spawned rope has no meaningful previous pose, and interpolating
+			// from one would smear it across the jump.
+			if (is_backend_supported()) {
+				PhysicsServer3D::get_singleton()->rope_reset_interpolation(rope);
+			}
+		} break;
+
 		case NOTIFICATION_TRANSFORM_CHANGED: {
 			// The mesh is written in local space, so a transform change needs no compensation at
 			// runtime -- the rope simply stays where it is being simulated. In the editor the node
@@ -192,6 +200,8 @@ void RopeBody3D::_update_simulation_params() {
 	ps->rope_set_param(rope, PhysicsServer3D::ROPE_PARAM_TOTAL_MASS, total_mass);
 	ps->rope_set_param(rope, PhysicsServer3D::ROPE_PARAM_STRETCH_COMPLIANCE, stretch_compliance);
 	ps->rope_set_param(rope, PhysicsServer3D::ROPE_PARAM_BEND_COMPLIANCE, bend_compliance);
+	ps->rope_set_param(rope, PhysicsServer3D::ROPE_PARAM_TWIST_COMPLIANCE, twist_compliance);
+	ps->rope_set_param(rope, PhysicsServer3D::ROPE_PARAM_TWIST_DAMPING, twist_damping);
 	ps->rope_set_param(rope, PhysicsServer3D::ROPE_PARAM_LINEAR_DAMPING, linear_damping);
 	ps->rope_set_param(rope, PhysicsServer3D::ROPE_PARAM_DRAG, drag);
 	ps->rope_set_param(rope, PhysicsServer3D::ROPE_PARAM_GRAVITY_SCALE, gravity_scale);
@@ -540,22 +550,54 @@ void RopeBody3D::_apply_pins() {
 
 	PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
 
-	// `rope_set_points()` drops attachments whose index no longer exists but keeps the rest, so
-	// clear first rather than leaving pins behind from a previous layout.
-	ps->rope_remove_all_attachments(rope);
+	// Detach only what has genuinely gone, rather than clearing the lot and rebuilding it.
+	//
+	// Rebuilding would be simpler, and it is what this did originally, but attachments carry captured
+	// state now -- the pose a lock fastened the rope in. A `RopeAttachment3D` parented to a moving
+	// body reports a transform change every frame, so a full rebuild would re-capture every lock
+	// every frame and the rope would never accumulate any twist at all.
+	for (int index : applied_pins) {
+		bool still_pinned = false;
+		for (const ResolvedPin &pin : resolved_pins) {
+			if (pin.index == index) {
+				still_pinned = true;
+				break;
+			}
+		}
+		if (!still_pinned) {
+			ps->rope_detach_point(rope, index);
+			ps->rope_pin_point(rope, index, false);
+		}
+	}
+
+	applied_pins.clear();
+	for (const ResolvedPin &pin : resolved_pins) {
+		applied_pins.push_back(pin.index);
+	}
 
 	for (const ResolvedPin &pin : resolved_pins) {
+		bool attached = false;
+
 		if (pin.is_body) {
 			PhysicsBody3D *body = ObjectDB::get_instance<PhysicsBody3D>(pin.node_id);
 			if (body != nullptr) {
 				const Vector3 local_offset = body->get_global_transform().affine_inverse().xform(pin.position);
 				ps->rope_attach_point_to_body(rope, pin.index, body->get_rid(), local_offset);
-				continue;
+				attached = true;
 			}
 		}
 
-		ps->rope_pin_point(rope, pin.index, true);
-		ps->rope_set_pin_position(rope, pin.index, pin.position);
+		if (!attached) {
+			ps->rope_pin_point(rope, pin.index, true);
+			ps->rope_set_pin_position(rope, pin.index, pin.position);
+		}
+
+		// Set after the attachment exists, since the locks live on it. Each is captured against the
+		// rope's current pose the first frame it is solved, so applying them here never jerks it.
+		ps->rope_set_attachment_flag(rope, pin.index, PhysicsServer3D::ROPE_ATTACHMENT_LOCK_TWIST, pin.lock_twist);
+		ps->rope_set_attachment_flag(rope, pin.index, PhysicsServer3D::ROPE_ATTACHMENT_LOCK_DIRECTION, pin.lock_direction);
+		ps->rope_set_attachment_flag(rope, pin.index, PhysicsServer3D::ROPE_ATTACHMENT_SOLVER_LIMIT, pin.solver_limit);
+		ps->rope_set_attachment_param(rope, pin.index, PhysicsServer3D::ROPE_ATTACHMENT_PARAM_DIRECTION_COMPLIANCE, pin.direction_compliance);
 	}
 }
 
@@ -602,26 +644,30 @@ void RopeBody3D::_resolve_pins() {
 		int index;
 		Node3D *node;
 		Vector3 offset;
+		bool lock_twist;
+		bool lock_direction;
+		float direction_compliance;
+		bool solver_limit;
 	};
 
 	LocalVector<Entry> entries;
 
-	auto add_entry = [&](float p_ratio, const NodePath &p_path, const Vector3 &p_offset) {
+	auto add_entry = [&](float p_ratio, const NodePath &p_path, const Vector3 &p_offset, bool p_lock_twist, bool p_lock_direction, float p_direction_compliance, bool p_solver_limit) {
 		Node3D *node = p_path.is_empty() ? nullptr : Object::cast_to<Node3D>(get_node_or_null(p_path));
-		entries.push_back({ (int)Math::round(CLAMP(p_ratio, 0.0f, 1.0f) * (float)last), node, p_offset });
+		entries.push_back({ (int)Math::round(CLAMP(p_ratio, 0.0f, 1.0f) * (float)last), node, p_offset, p_lock_twist, p_lock_direction, p_direction_compliance, p_solver_limit });
 	};
 
 	if (is_inside_tree()) {
 		if (!attach_start_path.is_empty()) {
-			add_entry(0.0f, attach_start_path, Vector3());
+			add_entry(0.0f, attach_start_path, Vector3(), false, false, 0.0f, false);
 		}
 		if (!attach_end_path.is_empty()) {
-			add_entry(1.0f, attach_end_path, Vector3());
+			add_entry(1.0f, attach_end_path, Vector3(), false, false, 0.0f, false);
 		}
 	}
 
 	for (const Pin &pin : pins) {
-		add_entry(pin.ratio, pin.node_path, pin.offset);
+		add_entry(pin.ratio, pin.node_path, pin.offset, pin.lock_twist, pin.lock_direction, pin.direction_compliance, pin.solver_limit);
 	}
 
 	// Attachment nodes come last so that one you positioned in the viewport wins over an array
@@ -637,10 +683,16 @@ void RopeBody3D::_resolve_pins() {
 		// The attachment marks *where on the body* the rope ties on, so the body is what the rope
 		// actually attaches to and the attachment's position becomes the offset into it. With no
 		// body above it, the attachment is just a pin the rope follows.
+		const bool lock_twist = attachment->get_lock_twist();
+		const bool lock_direction = attachment->get_lock_direction();
+		const float direction_compliance = attachment->get_direction_compliance();
+		const bool solver_limit = attachment->get_solver_limit();
+
 		if (PhysicsBody3D *body = attachment->get_attached_body()) {
-			entries.push_back({ index, body, body->get_global_transform().affine_inverse().xform(world_point) });
+			entries.push_back({ index, body, body->get_global_transform().affine_inverse().xform(world_point),
+					lock_twist, lock_direction, direction_compliance, solver_limit });
 		} else {
-			entries.push_back({ index, attachment, Vector3() });
+			entries.push_back({ index, attachment, Vector3(), lock_twist, lock_direction, direction_compliance, solver_limit });
 		}
 	}
 
@@ -660,6 +712,10 @@ void RopeBody3D::_resolve_pins() {
 		ResolvedPin pin;
 		pin.index = index;
 		pin.offset = winner->offset;
+		pin.lock_twist = winner->lock_twist;
+		pin.lock_direction = winner->lock_direction;
+		pin.direction_compliance = winner->direction_compliance;
+		pin.solver_limit = winner->solver_limit;
 
 		if (winner->node != nullptr) {
 			pin.node_id = winner->node->get_instance_id();
@@ -753,6 +809,50 @@ void RopeBody3D::set_pin_offset(int p_pin, const Vector3 &p_offset) {
 Vector3 RopeBody3D::get_pin_offset(int p_pin) const {
 	ERR_FAIL_INDEX_V(p_pin, (int)pins.size(), Vector3());
 	return pins[p_pin].offset;
+}
+
+void RopeBody3D::set_pin_lock_twist(int p_pin, bool p_enabled) {
+	ERR_FAIL_INDEX(p_pin, (int)pins.size());
+	pins[p_pin].lock_twist = p_enabled;
+	_pins_changed();
+}
+
+bool RopeBody3D::get_pin_lock_twist(int p_pin) const {
+	ERR_FAIL_INDEX_V(p_pin, (int)pins.size(), false);
+	return pins[p_pin].lock_twist;
+}
+
+void RopeBody3D::set_pin_lock_direction(int p_pin, bool p_enabled) {
+	ERR_FAIL_INDEX(p_pin, (int)pins.size());
+	pins[p_pin].lock_direction = p_enabled;
+	_pins_changed();
+}
+
+bool RopeBody3D::get_pin_lock_direction(int p_pin) const {
+	ERR_FAIL_INDEX_V(p_pin, (int)pins.size(), false);
+	return pins[p_pin].lock_direction;
+}
+
+void RopeBody3D::set_pin_direction_compliance(int p_pin, float p_compliance) {
+	ERR_FAIL_INDEX(p_pin, (int)pins.size());
+	pins[p_pin].direction_compliance = MAX(p_compliance, 0.0f);
+	_pins_changed();
+}
+
+float RopeBody3D::get_pin_direction_compliance(int p_pin) const {
+	ERR_FAIL_INDEX_V(p_pin, (int)pins.size(), 0.0f);
+	return pins[p_pin].direction_compliance;
+}
+
+void RopeBody3D::set_pin_solver_limit(int p_pin, bool p_enabled) {
+	ERR_FAIL_INDEX(p_pin, (int)pins.size());
+	pins[p_pin].solver_limit = p_enabled;
+	_pins_changed();
+}
+
+bool RopeBody3D::get_pin_solver_limit(int p_pin) const {
+	ERR_FAIL_INDEX_V(p_pin, (int)pins.size(), false);
+	return pins[p_pin].solver_limit;
 }
 
 int RopeBody3D::find_pin_at_index(int p_point_index) const {
@@ -912,35 +1012,82 @@ namespace {
 // answer for one more overlapping area is not worth the query time.
 constexpr int ROPE_AREA_QUERY_RESULTS = 32;
 
-// Point query set up once and reused for every particle of every rope in a sweep.
-//
-// `collision_mask` is the *area's own layer*, so the broadphase discards everything else before any
-// narrow-phase work happens -- without it each particle would be tested against every area in the
-// level. An area with no layer bits set would then match nothing, which is never what the caller
-// meant when they passed that area in explicitly, so it falls back to matching everything.
-PhysicsDirectSpaceState3D::PointParameters rope_area_point_params(const Area3D *p_area) {
-	PhysicsDirectSpaceState3D::PointParameters params;
-	params.collide_with_bodies = false;
-	params.collide_with_areas = true;
+// A capsule the size of one rope segment, which is exactly the shape the rope collides with. Created
+// once per sweep and resized per segment rather than per rope, since a sweep may cover many.
+struct RopeAreaProbe {
+	RID shape;
+	PhysicsDirectSpaceState3D::ShapeParameters params;
 
-	const uint32_t layer = p_area->get_collision_layer();
-	params.collision_mask = layer != 0 ? layer : UINT32_MAX;
+	RopeAreaProbe(const Area3D *p_area) {
+		shape = PhysicsServer3D::get_singleton()->capsule_shape_create();
 
-	return params;
+		params.shape_rid = shape;
+		params.collide_with_bodies = false;
+		params.collide_with_areas = true;
+
+		// The *area's own layer*, so the broadphase discards everything else before any narrow-phase
+		// work happens -- without it each segment would be tested against every area in the level. An
+		// area with no layer bits set would then match nothing, which is never what the caller meant
+		// when they passed that area in explicitly, so it falls back to matching everything.
+		const uint32_t layer = p_area->get_collision_layer();
+		params.collision_mask = layer != 0 ? layer : UINT32_MAX;
+	}
+
+	~RopeAreaProbe() {
+		if (shape.is_valid()) {
+			PhysicsServer3D::get_singleton()->free(shape);
+		}
+	}
+};
+
+// Orthonormal basis with its Y axis along `p_axis`, which is the axis a Godot capsule stands on.
+Basis rope_capsule_basis(const Vector3 &p_axis) {
+	const Vector3 reference = Math::abs(p_axis.y) > 0.9 ? Vector3(1, 0, 0) : Vector3(0, 1, 0);
+	const Vector3 x = reference.cross(p_axis).normalized();
+
+	Basis basis;
+	basis.set_columns(x, p_axis, p_axis.cross(x));
+	return basis;
 }
 
-// Indices of `p_points` that lie inside `p_area`. `p_first_only` stops at the first hit, which is
-// all `is_in_area()` needs and usually saves most of the queries.
-LocalVector<int> rope_points_in_area(PhysicsDirectSpaceState3D *p_state, const PackedVector3Array &p_points, ObjectID p_area_id, PhysicsDirectSpaceState3D::PointParameters &p_params, bool p_first_only) {
+// Segments of `p_points` that overlap `p_area`, tested as the capsules the rope actually collides
+// with rather than as bare points.
+//
+// Testing the particles alone is only as accurate as the rope's resolution: a rope lying across a
+// doorway-sized trigger with its particles either side of it reads as completely outside, and so does
+// any rope thicker than the area it is passing through. Sweeping the segment volume is the same test
+// the rope's own collision uses, so the answer agrees with what the rope visibly does.
+//
+// `p_first_only` stops at the first hit, which is all a plain membership test needs and usually saves
+// most of the queries.
+LocalVector<int> rope_segments_in_area(PhysicsDirectSpaceState3D *p_state, const PackedVector3Array &p_points, float p_radius, ObjectID p_area_id, RopeAreaProbe &p_probe, bool p_first_only) {
 	LocalVector<int> inside;
 
 	PhysicsDirectSpaceState3D::ShapeResult results[ROPE_AREA_QUERY_RESULTS];
 	const int count = p_points.size();
+	const real_t radius = MAX((real_t)p_radius, (real_t)0.001);
 
-	for (int i = 0; i < count; i++) {
-		p_params.position = p_points[i];
+	Dictionary shape_data;
+	shape_data["radius"] = radius;
 
-		const int hits = p_state->intersect_point(p_params, results, ROPE_AREA_QUERY_RESULTS);
+	for (int i = 0; i + 1 < count; i++) {
+		const Vector3 from = p_points[i];
+		const Vector3 to = p_points[i + 1];
+
+		const Vector3 segment = to - from;
+		const real_t length = segment.length();
+		if (length < (real_t)CMP_EPSILON) {
+			continue;
+		}
+
+		// A Godot capsule's height spans the whole shape, hemispherical caps included, so the
+		// cylindrical part is the segment and the caps are the rope's own round ends.
+		shape_data["height"] = length + radius * 2.0;
+		PhysicsServer3D::get_singleton()->shape_set_data(p_probe.shape, shape_data);
+
+		p_probe.params.transform = Transform3D(rope_capsule_basis(segment / length), (from + to) * 0.5);
+
+		const int hits = p_state->intersect_shape(p_probe.params, results, ROPE_AREA_QUERY_RESULTS);
 		for (int h = 0; h < hits; h++) {
 			if (results[h].collider_id != p_area_id) {
 				continue;
@@ -984,13 +1131,21 @@ PackedFloat32Array RopeBody3D::get_ratios_in_area(Area3D *p_area) const {
 		return ratios;
 	}
 
-	PhysicsDirectSpaceState3D::PointParameters params = rope_area_point_params(p_area);
-	const LocalVector<int> inside = rope_points_in_area(state, points, p_area->get_instance_id(), params, false);
+	RopeAreaProbe probe(p_area);
+	const LocalVector<int> inside = rope_segments_in_area(state, points, radius, p_area->get_instance_id(), probe, false);
 
-	ratios.resize(inside.size());
-	float *write = ratios.ptrw();
+	// Both ends of every overlapping segment, in order and without repeats. Reporting the segment's
+	// endpoints rather than only the particles that happen to test inside is what makes a rope merely
+	// *crossing* an area report where it crosses instead of reporting nothing at all.
+	const float last = (float)(count - 1);
+	int previous = -1;
 	for (uint32_t i = 0; i < inside.size(); i++) {
-		write[i] = (float)inside[i] / (float)(count - 1);
+		const int segment = inside[i];
+		if (segment != previous) {
+			ratios.push_back((float)segment / last);
+		}
+		ratios.push_back((float)(segment + 1) / last);
+		previous = segment + 1;
 	}
 
 	return ratios;
@@ -1015,8 +1170,8 @@ bool RopeBody3D::is_in_area(Area3D *p_area) const {
 		return false;
 	}
 
-	PhysicsDirectSpaceState3D::PointParameters params = rope_area_point_params(p_area);
-	return !rope_points_in_area(state, points, p_area->get_instance_id(), params, true).is_empty();
+	RopeAreaProbe probe(p_area);
+	return !rope_segments_in_area(state, points, radius, p_area->get_instance_id(), probe, true).is_empty();
 }
 
 TypedArray<RopeBody3D> RopeBody3D::get_ropes_in_area(Area3D *p_area) {
@@ -1033,7 +1188,7 @@ TypedArray<RopeBody3D> RopeBody3D::get_ropes_in_area(Area3D *p_area) {
 		return found;
 	}
 
-	PhysicsDirectSpaceState3D::PointParameters params = rope_area_point_params(p_area);
+	RopeAreaProbe probe(p_area);
 	const ObjectID area_id = p_area->get_instance_id();
 
 	for (RopeBody3D *candidate : all_ropes) {
@@ -1046,7 +1201,7 @@ TypedArray<RopeBody3D> RopeBody3D::get_ropes_in_area(Area3D *p_area) {
 			continue;
 		}
 
-		if (!rope_points_in_area(state, points, area_id, params, true).is_empty()) {
+		if (!rope_segments_in_area(state, points, candidate->radius, area_id, probe, true).is_empty()) {
 			found.push_back(candidate);
 		}
 	}
@@ -1266,9 +1421,21 @@ void RopeBody3D::_rebuild_mesh() {
 	mesh_ring_stride = ring_stride;
 }
 
-// Rotation-minimising frames along the rope. Recomputing an arbitrary perpendicular per ring would
-// make the tube twist visibly as the rope swings; propagating one frame along the chain does not.
-void RopeBody3D::_update_frames() {
+// Tangents from the sampled points, and the material frame from the solver.
+//
+// The frame has to come from there. Deriving a perpendicular here is stable *along* the rope -- which
+// is what the previous version did, and did correctly -- but not stable *over time*: the seed was
+// rebuilt every frame from an arbitrary reference axis, so the whole tube's surface rolled about its
+// own axis as the rope swung. It was also seeded through a `|tangent.y| > 0.99` branch whose two
+// sides disagree by roughly a quarter turn for a rope tilting out of the plane the branch happens to
+// favour, and a rope hanging from a hook crosses that threshold twice per swing. The solver instead
+// carries one frame across time and parallel-transports the rest along the rope, which is coherent in
+// both directions.
+//
+// The fallback below is the old spatial propagation, and it is reached only when the solver has no
+// frame to give -- in the editor, where the rope does not simulate and a static preview has nothing
+// to be temporally coherent about.
+void RopeBody3D::_update_frames(const Basis &p_to_local) {
 	const int count = point_cache.size();
 
 	tangent_cache.resize(count);
@@ -1295,21 +1462,45 @@ void RopeBody3D::_update_frames() {
 		tangent_cache[i] = tangent.normalized();
 	}
 
-	// Seed the first frame with any perpendicular, then transport it.
+	const PackedVector3Array normals = is_backend_supported()
+			? PhysicsServer3D::get_singleton()->rope_get_point_normals(rope)
+			: PackedVector3Array();
+
+	if (normals.size() == count) {
+		const Vector3 *normals_read = normals.ptr();
+
+		for (int i = 0; i < count; i++) {
+			const Vector3 &tangent = tangent_cache[i];
+
+			// The solver's tangents are per segment and these are per particle, so the two disagree
+			// slightly at a bend; re-perpendicularising is what reconciles them.
+			Vector3 normal = p_to_local.xform(normals_read[i]);
+			normal -= tangent * normal.dot(tangent);
+
+			if (normal.length_squared() < CMP_EPSILON) {
+				const Vector3 reference = Math::abs(tangent.y) > 0.9 ? Vector3(1, 0, 0) : Vector3(0, 1, 0);
+				normal = reference.cross(tangent);
+			}
+
+			normal_cache[i] = normal.normalized();
+			binormal_cache[i] = tangent.cross(normal_cache[i]);
+		}
+
+		return;
+	}
+
 	const Vector3 &first_tangent = tangent_cache[0];
-	Vector3 reference = Math::abs(first_tangent.y) > 0.99 ? Vector3(1, 0, 0) : Vector3(0, 1, 0);
+	Vector3 reference = Math::abs(first_tangent.y) > 0.9 ? Vector3(1, 0, 0) : Vector3(0, 1, 0);
 	normal_cache[0] = reference.cross(first_tangent).normalized();
 	binormal_cache[0] = first_tangent.cross(normal_cache[0]);
 
 	for (int i = 1; i < count; i++) {
 		const Vector3 &tangent = tangent_cache[i];
 
-		// Project the previous normal onto the plane perpendicular to the new tangent. This is the
-		// double-reflection method's cheap approximation and is stable for a chain this smooth.
 		Vector3 normal = normal_cache[i - 1] - tangent * normal_cache[i - 1].dot(tangent);
 
 		if (normal.length_squared() < CMP_EPSILON) {
-			reference = Math::abs(tangent.y) > 0.99 ? Vector3(1, 0, 0) : Vector3(0, 1, 0);
+			reference = Math::abs(tangent.y) > 0.9 ? Vector3(1, 0, 0) : Vector3(0, 1, 0);
 			normal = reference.cross(tangent);
 		}
 
@@ -1331,7 +1522,17 @@ void RopeBody3D::_update_mesh() {
 		return;
 	}
 
-	const PackedVector3Array points = PhysicsServer3D::get_singleton()->rope_get_points(rope);
+	// With physics interpolation on, every other object in the scene is drawn somewhere between the
+	// last two physics steps, while a mesh built from vertex data is drawn at the current one -- which
+	// puts the rope up to a whole step *ahead* of everything it is tied to, by an amount that changes
+	// every rendered frame. That reads as jitter rather than as lag, and it is why a rope tied to a
+	// tracked hand never quite sits on it. Vertex data is not something the renderer can interpolate
+	// for us, so the rope has to be asked for the pose at the same instant everything else is showing.
+	PhysicsServer3D *physics = PhysicsServer3D::get_singleton();
+	const PackedVector3Array points = is_physics_interpolated_and_enabled()
+			? physics->rope_get_points_interpolated(rope, (float)Engine::get_singleton()->get_physics_interpolation_fraction())
+			: physics->rope_get_points(rope);
+
 	if (points.size() != point_count) {
 		// Topology changed underneath us; rebuild rather than write out of bounds.
 		_mark_mesh_dirty();
@@ -1349,7 +1550,7 @@ void RopeBody3D::_update_mesh() {
 		point_cache[i] = to_local.xform(points_read[i]);
 	}
 
-	_update_frames();
+	_update_frames(to_local.basis);
 
 	uint8_t *write_buffer = vertex_buffer.ptrw();
 
@@ -1517,6 +1718,22 @@ void RopeBody3D::set_bend_compliance(float p_compliance) {
 
 	if (is_backend_supported()) {
 		PhysicsServer3D::get_singleton()->rope_set_param(rope, PhysicsServer3D::ROPE_PARAM_BEND_COMPLIANCE, bend_compliance);
+	}
+}
+
+void RopeBody3D::set_twist_compliance(float p_compliance) {
+	twist_compliance = CLAMP(p_compliance, 0.0f, ROPE_TWIST_DISABLED);
+
+	if (is_backend_supported()) {
+		PhysicsServer3D::get_singleton()->rope_set_param(rope, PhysicsServer3D::ROPE_PARAM_TWIST_COMPLIANCE, twist_compliance);
+	}
+}
+
+void RopeBody3D::set_twist_damping(float p_damping) {
+	twist_damping = MAX(p_damping, 0.0f);
+
+	if (is_backend_supported()) {
+		PhysicsServer3D::get_singleton()->rope_set_param(rope, PhysicsServer3D::ROPE_PARAM_TWIST_DAMPING, twist_damping);
 	}
 }
 
@@ -1769,6 +1986,10 @@ void RopeBody3D::_bind_methods() {
 
 	ClassDB::bind_method(D_METHOD("set_bend_compliance", "compliance"), &RopeBody3D::set_bend_compliance);
 	ClassDB::bind_method(D_METHOD("get_bend_compliance"), &RopeBody3D::get_bend_compliance);
+	ClassDB::bind_method(D_METHOD("set_twist_compliance", "compliance"), &RopeBody3D::set_twist_compliance);
+	ClassDB::bind_method(D_METHOD("get_twist_compliance"), &RopeBody3D::get_twist_compliance);
+	ClassDB::bind_method(D_METHOD("set_twist_damping", "damping"), &RopeBody3D::set_twist_damping);
+	ClassDB::bind_method(D_METHOD("get_twist_damping"), &RopeBody3D::get_twist_damping);
 
 	ClassDB::bind_method(D_METHOD("set_linear_damping", "damping"), &RopeBody3D::set_linear_damping);
 	ClassDB::bind_method(D_METHOD("get_linear_damping"), &RopeBody3D::get_linear_damping);
@@ -1818,6 +2039,14 @@ void RopeBody3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_pin_count", "count"), &RopeBody3D::set_pin_count);
 	ClassDB::bind_method(D_METHOD("get_pin_count"), &RopeBody3D::get_pin_count);
 
+	ClassDB::bind_method(D_METHOD("set_pin_lock_twist", "pin_index", "enabled"), &RopeBody3D::set_pin_lock_twist);
+	ClassDB::bind_method(D_METHOD("get_pin_lock_twist", "pin_index"), &RopeBody3D::get_pin_lock_twist);
+	ClassDB::bind_method(D_METHOD("set_pin_lock_direction", "pin_index", "enabled"), &RopeBody3D::set_pin_lock_direction);
+	ClassDB::bind_method(D_METHOD("get_pin_lock_direction", "pin_index"), &RopeBody3D::get_pin_lock_direction);
+	ClassDB::bind_method(D_METHOD("set_pin_direction_compliance", "pin_index", "compliance"), &RopeBody3D::set_pin_direction_compliance);
+	ClassDB::bind_method(D_METHOD("get_pin_direction_compliance", "pin_index"), &RopeBody3D::get_pin_direction_compliance);
+	ClassDB::bind_method(D_METHOD("set_pin_solver_limit", "pin_index", "enabled"), &RopeBody3D::set_pin_solver_limit);
+	ClassDB::bind_method(D_METHOD("get_pin_solver_limit", "pin_index"), &RopeBody3D::get_pin_solver_limit);
 	ClassDB::bind_method(D_METHOD("set_pin_ratio", "pin_index", "ratio"), &RopeBody3D::set_pin_ratio);
 	ClassDB::bind_method(D_METHOD("get_pin_ratio", "pin_index"), &RopeBody3D::get_pin_ratio);
 
@@ -1877,6 +2106,8 @@ void RopeBody3D::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "inextensible"), "set_inextensible", "is_inextensible");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "stretch_compliance", PROPERTY_HINT_RANGE, "0,0.01,0.000001,or_greater"), "set_stretch_compliance", "get_stretch_compliance");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "bend_compliance", PROPERTY_HINT_RANGE, "0,1000000,0.001,exp"), "set_bend_compliance", "get_bend_compliance");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "twist_compliance", PROPERTY_HINT_RANGE, "0,1000000,0.001,exp"), "set_twist_compliance", "get_twist_compliance");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "twist_damping", PROPERTY_HINT_RANGE, "0,10,0.01,or_greater"), "set_twist_damping", "get_twist_damping");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "linear_damping", PROPERTY_HINT_RANGE, "0,10,0.001,or_greater"), "set_linear_damping", "get_linear_damping");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "drag", PROPERTY_HINT_RANGE, "0,10,0.001,or_greater"), "set_drag", "get_drag");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "gravity_scale", PROPERTY_HINT_RANGE, "-8,8,0.001,or_less,or_greater"), "set_gravity_scale", "get_gravity_scale");
@@ -1915,5 +2146,9 @@ void RopeBody3D::_bind_methods() {
 	base_property_helper.register_property(PropertyInfo(Variant::FLOAT, "ratio", PROPERTY_HINT_RANGE, "0,1,0.001"), defaults.ratio, &RopeBody3D::set_pin_ratio, &RopeBody3D::get_pin_ratio);
 	base_property_helper.register_property(PropertyInfo(Variant::NODE_PATH, "node", PROPERTY_HINT_NODE_PATH_VALID_TYPES, "Node3D"), defaults.node_path, &RopeBody3D::set_pin_node, &RopeBody3D::get_pin_node);
 	base_property_helper.register_property(PropertyInfo(Variant::VECTOR3, "offset"), defaults.offset, &RopeBody3D::set_pin_offset, &RopeBody3D::get_pin_offset);
+	base_property_helper.register_property(PropertyInfo(Variant::BOOL, "lock_twist"), defaults.lock_twist, &RopeBody3D::set_pin_lock_twist, &RopeBody3D::get_pin_lock_twist);
+	base_property_helper.register_property(PropertyInfo(Variant::BOOL, "lock_direction"), defaults.lock_direction, &RopeBody3D::set_pin_lock_direction, &RopeBody3D::get_pin_lock_direction);
+	base_property_helper.register_property(PropertyInfo(Variant::FLOAT, "direction_compliance", PROPERTY_HINT_RANGE, "0,1,0.0001,exp"), defaults.direction_compliance, &RopeBody3D::set_pin_direction_compliance, &RopeBody3D::get_pin_direction_compliance);
+	base_property_helper.register_property(PropertyInfo(Variant::BOOL, "solver_limit"), defaults.solver_limit, &RopeBody3D::set_pin_solver_limit, &RopeBody3D::get_pin_solver_limit);
 	PropertyListHelper::register_base_helper(get_class_static(), &base_property_helper);
 }

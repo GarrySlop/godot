@@ -656,7 +656,48 @@ public:
 		// Total rest length of the rope. Zero means "derive it from the spacing of the points that
 		// were handed to `rope_set_points()`", which is the behaviour when no length is requested.
 		ROPE_PARAM_LENGTH,
+		// Torsional compliance, in radians per newton-metre. Governs how hard the rope resists being
+		// wound about its own axis. Only does anything between two rotationally constrained points --
+		// see `ROPE_ATTACHMENT_LOCK_TWIST` -- because with one end free the rope simply turns as a
+		// whole. High values disable it outright, which is the default.
+		ROPE_PARAM_TWIST_COMPLIANCE,
+		// Damping on the twist degree of freedom alone, so torsional ringing settles without touching
+		// how the rope moves through space.
+		ROPE_PARAM_TWIST_DAMPING,
 		ROPE_PARAM_MAX,
+	};
+
+	// Per-attachment options. An attachment is a ball joint by default; these weld the rope's own
+	// orientation to whatever holds it, and each is captured in the pose the rope already has at the
+	// moment it is switched on, so turning one on never jerks the rope.
+	enum RopeAttachmentFlag {
+		// Weld the rope's roll about its own axis. This is what stops a load hanging on a rope from
+		// spinning freely forever.
+		ROPE_ATTACHMENT_LOCK_TWIST,
+		// Weld the direction the rope leaves the attachment in, so it behaves like a cable gland or a
+		// splice rather than a hook.
+		ROPE_ATTACHMENT_LOCK_DIRECTION,
+		// Hand this attachment's reach limit to the physics solver as a real constraint, instead of
+		// the rope enforcing it itself after the solver has finished.
+		//
+		// Needed whenever the load reaches the attached body through *another* joint. The rope runs
+		// after the physics step, so everything it does to a body is a velocity written after the
+		// fact; another constraint on that body is then re-solved from scratch on the next step and
+		// simply overwrites it. A body carrying its own weight is held either way, but a 1 kg body
+		// with a 16 kg one hung off it through a spring slides indefinitely without this, and is held
+		// to within a centimetre with it.
+		//
+		// The cost is that the solver's constraint does not anticipate the arc a swinging body
+		// travels, so it bleeds energy from a free swing that the rope's own limit does not.
+		ROPE_ATTACHMENT_SOLVER_LIMIT,
+		ROPE_ATTACHMENT_FLAG_MAX,
+	};
+
+	enum RopeAttachmentParam {
+		// How softly `ROPE_ATTACHMENT_LOCK_DIRECTION` holds, in radians per newton-metre. Zero is a
+		// rigid weld.
+		ROPE_ATTACHMENT_PARAM_DIRECTION_COMPLIANCE,
+		ROPE_ATTACHMENT_PARAM_MAX,
 	};
 
 	enum RopeFlag {
@@ -673,6 +714,13 @@ public:
 
 	virtual void rope_set_points(RID p_rope, const Vector<Vector3> &p_points) {}
 	virtual Vector<Vector3> rope_get_points(RID p_rope) const { return Vector<Vector3>(); }
+	// One unit vector per point, perpendicular to the rope there. Rotation-minimising along the rope
+	// and stable from frame to frame, so a mesh built on it neither swims nor snaps as the rope moves.
+	virtual Vector<Vector3> rope_get_point_normals(RID p_rope) const { return Vector<Vector3>(); }
+	// The rope's pose `p_fraction` of the way from the previous physics step to the current one, for
+	// drawing it in step with a physics-interpolated scene.
+	virtual Vector<Vector3> rope_get_points_interpolated(RID p_rope, float p_fraction) const { return Vector<Vector3>(); }
+	virtual void rope_reset_interpolation(RID p_rope) {}
 	virtual int rope_get_point_count(RID p_rope) const { return 0; }
 
 	virtual Vector3 rope_get_point_position(RID p_rope, int p_point_index) const { return Vector3(); }
@@ -708,6 +756,12 @@ public:
 
 	virtual void rope_attach_point_to_body(RID p_rope, int p_point_index, RID p_body, const Vector3 &p_local_offset) {}
 	virtual void rope_detach_point(RID p_rope, int p_point_index) {}
+
+	virtual void rope_set_attachment_flag(RID p_rope, int p_point_index, RopeAttachmentFlag p_flag, bool p_enabled) {}
+	virtual bool rope_get_attachment_flag(RID p_rope, int p_point_index, RopeAttachmentFlag p_flag) const { return false; }
+
+	virtual void rope_set_attachment_param(RID p_rope, int p_point_index, RopeAttachmentParam p_param, float p_value) {}
+	virtual float rope_get_attachment_param(RID p_rope, int p_point_index, RopeAttachmentParam p_param) const { return 0.0f; }
 	virtual void rope_remove_all_attachments(RID p_rope) {}
 
 	virtual void rope_apply_point_impulse(RID p_rope, int p_point_index, const Vector3 &p_impulse) {}
@@ -1160,6 +1214,8 @@ VARIANT_ENUM_CAST(PhysicsServer3D::BodyState);
 VARIANT_ENUM_CAST(PhysicsServer3D::BodyAxis);
 VARIANT_ENUM_CAST(PhysicsServer3D::RopeParameter);
 VARIANT_ENUM_CAST(PhysicsServer3D::RopeFlag);
+VARIANT_ENUM_CAST(PhysicsServer3D::RopeAttachmentFlag);
+VARIANT_ENUM_CAST(PhysicsServer3D::RopeAttachmentParam);
 VARIANT_ENUM_CAST(PhysicsServer3D::PinJointParam);
 VARIANT_ENUM_CAST(PhysicsServer3D::JointType);
 VARIANT_ENUM_CAST(PhysicsServer3D::HingeJointParam);

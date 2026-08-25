@@ -45,6 +45,7 @@
 #include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Constraints/DistanceConstraint.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 
 namespace {
@@ -61,15 +62,33 @@ constexpr int ROPE_MAX_CONTACTS_PER_SEGMENT = 4;
 // against and would pass straight through it.
 constexpr float ROPE_SPECULATIVE_MARGIN = 0.02f;
 
+// Ratio of a cable's along-axis drag coefficient to its crosswise one. Air resistance on a cylinder
+// is dominated by the component across its axis; sliding along its own length is nearly free by
+// comparison. Roughly 0.02 for a real cable, and the reason a slack rope flicks sideways and settles
+// rather than gliding through the air like a bead on a wire.
+constexpr float ROPE_TANGENTIAL_DRAG_RATIO = 0.02f;
+
+// Twist is skipped entirely at or above this compliance, which is the default: a rope that offers no
+// torsional resistance is what the simulation did before twist existed, so leaving it off costs
+// nothing and changes nothing for scenes that were built without it.
+constexpr float ROPE_TWIST_DISABLED_COMPLIANCE = 1e6f;
+
 // Bending is skipped entirely at or above this compliance. A rope is floppy by default and the
 // constraint would just be arithmetic with no visible effect.
 constexpr float ROPE_BEND_DISABLED_COMPLIANCE = 1e6f;
 
-// Fraction of a leftover positional error handed back to a rigid body as velocity per frame, after
-// the part of its own motion that fights the rope has been cancelled. See
-// `rope_reaction_velocity()`. Low enough that recovery is a visible settle rather than a snap, high
-// enough that the error is gone within a few frames.
+// Fraction of an accumulated positional correction that is handed back to a rigid body as a
+// reaction. This is the pin and the contacts -- the constraints that transmit force through the rope
+// itself -- and it stays gentle: the gap it measures is re-derived every substep against a body that
+// cannot actually move, so it carries solver noise, and feeding that back at full strength turns
+// into a torque that quietly drains a freely rotating load (measured at 18.6 % of a swing's energy
+// over fifteen seconds).
 constexpr float ROPE_REACTION_RELAXATION = 0.25f;
+
+// Ceiling on how fast the limit joint may reel a body back in. Only reachable when a body is already
+// well outside its limit -- teleported there, or spawned there -- because the limit is solved
+// predictively and so does not normally let an error build up at all. See `_solve_velocities()`.
+constexpr float ROPE_MAX_REEL_IN_SPEED = 1.0f;
 
 // Gauss-Seidel sweeps the bending constraint gets per substep. It gets more than the distance
 // constraint because it is the constraint that has to carry a shape along the whole rope, and
@@ -165,6 +184,8 @@ void JoltRope3D::set_space(JoltSpace3D *p_space) {
 	}
 
 	if (space != nullptr) {
+		// Constraints belong to the space that holds them, so they cannot outlive this one.
+		_release_all_limit_constraints();
 		space->dequeue_rope(&active_list);
 	}
 
@@ -209,6 +230,9 @@ void JoltRope3D::set_points(const Vector<Vector3> &p_points) {
 		}
 	}
 	for (int index : stale) {
+		if (Attachment *attachment = attachments.getptr(index)) {
+			_release_limit_constraint(*attachment);
+		}
 		attachments.erase(index);
 	}
 
@@ -261,6 +285,30 @@ void JoltRope3D::_update_masses() {
 }
 
 void JoltRope3D::_update_rest_lengths() {
+	// A different particle count means a different set of segments, so the carried frame no longer
+	// describes this rope and has to be re-seeded rather than transported. Twist is stored against
+	// that frame, so it is reset with it.
+	ref_frame_valid = false;
+
+	const uint32_t new_segments = positions.size() > 0 ? positions.size() - 1 : 0;
+	if (twist_angles.size() != new_segments) {
+		twist_angles.resize(new_segments);
+		twist_velocities.resize(new_segments);
+		twist_scratch_c.resize(new_segments);
+		twist_scratch_d.resize(new_segments);
+		twist_predicted.resize(new_segments);
+
+		for (uint32_t i = 0; i < new_segments; i++) {
+			twist_angles[i] = 0.0f;
+			twist_velocities[i] = 0.0f;
+		}
+
+		for (KeyValue<int, Attachment> &E : attachments) {
+			E.value.twist_captured = false;
+			E.value.direction_captured = false;
+		}
+	}
+
 	const uint32_t count = positions.size();
 
 	const uint32_t segment_count = count > 0 ? count - 1 : 0;
@@ -339,6 +387,12 @@ void JoltRope3D::set_param(PhysicsServer3D::RopeParameter p_param, float p_value
 		case PhysicsServer3D::ROPE_PARAM_MAX_REACTION_IMPULSE: {
 			max_reaction_impulse = MAX(p_value, 0.0f);
 		} break;
+		case PhysicsServer3D::ROPE_PARAM_TWIST_COMPLIANCE: {
+			twist_compliance = MAX(p_value, 0.0f);
+		} break;
+		case PhysicsServer3D::ROPE_PARAM_TWIST_DAMPING: {
+			twist_damping = MAX(p_value, 0.0f);
+		} break;
 		case PhysicsServer3D::ROPE_PARAM_LENGTH: {
 			const float length = MAX(p_value, 0.0f);
 			if (!Math::is_equal_approx(rest_length, length)) {
@@ -362,6 +416,10 @@ float JoltRope3D::get_param(PhysicsServer3D::RopeParameter p_param) const {
 			return stretch_compliance;
 		case PhysicsServer3D::ROPE_PARAM_BEND_COMPLIANCE:
 			return bend_compliance;
+		case PhysicsServer3D::ROPE_PARAM_TWIST_COMPLIANCE:
+			return twist_compliance;
+		case PhysicsServer3D::ROPE_PARAM_TWIST_DAMPING:
+			return twist_damping;
 		case PhysicsServer3D::ROPE_PARAM_LINEAR_DAMPING:
 			return linear_damping;
 		case PhysicsServer3D::ROPE_PARAM_DRAG:
@@ -432,8 +490,14 @@ void JoltRope3D::pin_point(int p_index, bool p_pin) {
 
 	if (p_pin) {
 		Attachment attachment;
+		_carry_locks(attachment, p_index, ATTACH_STATIC, RID());
 		attachment.mode = ATTACH_STATIC;
-		attachment.static_position = positions[p_index];
+		// Re-pinning an already pinned point must not teleport it back to wherever the particle
+		// happens to be now; that is `set_pin_position()`'s job.
+		const Attachment *existing = attachments.getptr(p_index);
+		attachment.static_position = (existing != nullptr && existing->mode == ATTACH_STATIC)
+				? existing->static_position
+				: positions[p_index];
 		attachments[p_index] = attachment;
 	} else {
 		const Attachment *existing = attachments.getptr(p_index);
@@ -469,6 +533,7 @@ void JoltRope3D::attach_point_to_body(int p_index, RID p_body_rid, JoltBody3D *p
 	ERR_FAIL_INDEX(p_index, (int)positions.size());
 
 	Attachment attachment;
+	_carry_locks(attachment, p_index, ATTACH_BODY, p_body_rid);
 	attachment.mode = ATTACH_BODY;
 	attachment.body_rid = p_body_rid;
 	attachment.body = p_body;
@@ -478,7 +543,141 @@ void JoltRope3D::attach_point_to_body(int p_index, RID p_body_rid, JoltBody3D *p
 	lra_dirty = true;
 }
 
+void JoltRope3D::set_attachment_flag(int p_index, PhysicsServer3D::RopeAttachmentFlag p_flag, bool p_enabled) {
+	Attachment *attachment = attachments.getptr(p_index);
+	if (attachment == nullptr) {
+		return;
+	}
+
+	switch (p_flag) {
+		case PhysicsServer3D::ROPE_ATTACHMENT_LOCK_TWIST: {
+			if (attachment->lock_twist != p_enabled) {
+				attachment->lock_twist = p_enabled;
+				// Re-capture rather than reuse the old pose: a lock switched off and on again should
+				// fasten the rope where it is now, not drag it back to where it was.
+				attachment->twist_captured = false;
+			}
+		} break;
+		case PhysicsServer3D::ROPE_ATTACHMENT_LOCK_DIRECTION: {
+			if (attachment->lock_direction != p_enabled) {
+				attachment->lock_direction = p_enabled;
+				attachment->direction_captured = false;
+			}
+		} break;
+		case PhysicsServer3D::ROPE_ATTACHMENT_SOLVER_LIMIT: {
+			if (attachment->solver_limit != p_enabled) {
+				attachment->solver_limit = p_enabled;
+				if (!p_enabled) {
+					_release_limit_constraint(*attachment);
+				}
+			}
+		} break;
+		default: {
+			ERR_FAIL_MSG(vformat("Unhandled rope attachment flag: '%d'. This should not happen. Please report this.", p_flag));
+		}
+	}
+}
+
+bool JoltRope3D::get_attachment_flag(int p_index, PhysicsServer3D::RopeAttachmentFlag p_flag) const {
+	const Attachment *attachment = attachments.getptr(p_index);
+	if (attachment == nullptr) {
+		return false;
+	}
+
+	switch (p_flag) {
+		case PhysicsServer3D::ROPE_ATTACHMENT_LOCK_TWIST:
+			return attachment->lock_twist;
+		case PhysicsServer3D::ROPE_ATTACHMENT_LOCK_DIRECTION:
+			return attachment->lock_direction;
+		case PhysicsServer3D::ROPE_ATTACHMENT_SOLVER_LIMIT:
+			return attachment->solver_limit;
+		default:
+			ERR_FAIL_V_MSG(false, vformat("Unhandled rope attachment flag: '%d'. This should not happen. Please report this.", p_flag));
+	}
+}
+
+void JoltRope3D::set_attachment_param(int p_index, PhysicsServer3D::RopeAttachmentParam p_param, float p_value) {
+	Attachment *attachment = attachments.getptr(p_index);
+	if (attachment == nullptr) {
+		return;
+	}
+
+	switch (p_param) {
+		case PhysicsServer3D::ROPE_ATTACHMENT_PARAM_DIRECTION_COMPLIANCE: {
+			attachment->direction_compliance = MAX(p_value, 0.0f);
+		} break;
+		default: {
+			ERR_FAIL_MSG(vformat("Unhandled rope attachment parameter: '%d'. This should not happen. Please report this.", p_param));
+		}
+	}
+}
+
+float JoltRope3D::get_attachment_param(int p_index, PhysicsServer3D::RopeAttachmentParam p_param) const {
+	const Attachment *attachment = attachments.getptr(p_index);
+	if (attachment == nullptr) {
+		return 0.0f;
+	}
+
+	switch (p_param) {
+		case PhysicsServer3D::ROPE_ATTACHMENT_PARAM_DIRECTION_COMPLIANCE:
+			return attachment->direction_compliance;
+		default:
+			ERR_FAIL_V_MSG(0.0f, vformat("Unhandled rope attachment parameter: '%d'. This should not happen. Please report this.", p_param));
+	}
+}
+
+// Carries an existing attachment's lock settings, and the pose it captured them in, onto the
+// replacement.
+//
+// Attachments get re-declared whenever the scene reports a change, and for a `RopeAttachment3D`
+// parented to a moving body that is every single frame. A lock re-captures the rope's current pose
+// the first time it is solved, so without this it would re-capture continuously and never build up
+// any twist at all -- the feature would appear to do nothing. The captured pose only carries over
+// when the replacement refers to the same thing; anything else genuinely is a new attachment.
+void JoltRope3D::_carry_locks(Attachment &p_attachment, int p_index, AttachMode p_mode, const RID &p_body_rid) {
+	Attachment *existing = attachments.getptr(p_index);
+	if (existing == nullptr) {
+		return;
+	}
+
+	p_attachment.lock_twist = existing->lock_twist;
+	p_attachment.lock_direction = existing->lock_direction;
+	p_attachment.direction_compliance = existing->direction_compliance;
+	p_attachment.solver_limit = existing->solver_limit;
+
+	if (existing->mode != p_mode || (p_mode == ATTACH_BODY && existing->body_rid != p_body_rid)) {
+		// Genuinely a different attachment. Its Jolt constraint describes the old one, and the space
+		// is still holding it, so it has to be unregistered rather than just dropped.
+		_release_limit_constraint(*existing);
+		return;
+	}
+
+	p_attachment.locked_normal = existing->locked_normal;
+	p_attachment.locked_direction = existing->locked_direction;
+	p_attachment.twist_captured = existing->twist_captured;
+	p_attachment.direction_captured = existing->direction_captured;
+	p_attachment.twist_target = existing->twist_target;
+	p_attachment.twist_segment = existing->twist_segment;
+
+	// The Jolt constraint moves across rather than being rebuilt. It is re-declared every frame for an
+	// attachment node parented to a moving body, and a constraint recreated that often never keeps the
+	// impulse it accumulated last step -- so it solves cold every time and visibly under-holds. It is
+	// also registered with the space, so dropping the reference here would leave the space with a
+	// constraint nothing owns.
+	p_attachment.limit_constraint = existing->limit_constraint;
+	p_attachment.limit_constraint_body = existing->limit_constraint_body;
+	p_attachment.limit_constraint_anchor_body = existing->limit_constraint_anchor_body;
+	p_attachment.limit_constraint_point = existing->limit_constraint_point;
+	p_attachment.limit_constraint_offset = existing->limit_constraint_offset;
+	p_attachment.limit_constraint_distance = existing->limit_constraint_distance;
+	existing->limit_constraint = nullptr;
+}
+
 void JoltRope3D::detach_point(int p_index) {
+	if (Attachment *attachment = attachments.getptr(p_index)) {
+		_release_limit_constraint(*attachment);
+	}
+
 	if (attachments.erase(p_index)) {
 		lra_dirty = true;
 	}
@@ -486,6 +685,7 @@ void JoltRope3D::detach_point(int p_index) {
 
 void JoltRope3D::remove_all_attachments() {
 	if (!attachments.is_empty()) {
+		_release_all_limit_constraints();
 		attachments.clear();
 		lra_dirty = true;
 	}
@@ -501,6 +701,11 @@ void JoltRope3D::detach_from_body(RID p_body_rid) {
 	}
 
 	for (int index : stale) {
+		// The body is going away, and Jolt requires a constraint to be gone before either of its
+		// bodies is.
+		if (Attachment *attachment = attachments.getptr(index)) {
+			_release_limit_constraint(*attachment);
+		}
 		attachments.erase(index);
 	}
 
@@ -526,6 +731,112 @@ void JoltRope3D::apply_central_impulse(const Vector3 &p_impulse) {
 	}
 }
 
+void JoltRope3D::_release_limit_constraint(Attachment &p_attachment) {
+	if (p_attachment.limit_constraint == nullptr) {
+		return;
+	}
+
+	if (space != nullptr) {
+		space->remove_joint(p_attachment.limit_constraint);
+	}
+
+	p_attachment.limit_constraint = nullptr;
+	p_attachment.limit_constraint_body = JPH::BodyID();
+	p_attachment.limit_constraint_anchor_body = JPH::BodyID();
+	p_attachment.limit_constraint_distance = -1.0f;
+}
+
+void JoltRope3D::_release_all_limit_constraints() {
+	for (KeyValue<int, Attachment> &E : attachments) {
+		_release_limit_constraint(E.value);
+	}
+}
+
+// Hands the limit joint to Jolt as a real `DistanceConstraint`, so a body tied to the rope is bounded
+// by it inside the solver rather than afterwards.
+//
+// The rope's own version of this constraint stays in `_solve_velocities()` and is used whenever a
+// constraint could not be built -- a rope with no immovable anchor to measure from, an anchor whose
+// body has left the space. The two are never both active on the same attachment, because between
+// them they would take the same violation out of the body twice.
+void JoltRope3D::_update_limit_constraint(Attachment &p_attachment, const Attachment *p_anchor) {
+	const JoltBody3D *body = p_attachment.body;
+	JPH::Body *jolt_body = (body != nullptr && body->in_space()) ? body->get_jolt_body() : nullptr;
+
+	if (space == nullptr || !inextensible || !p_attachment.solver_limit || p_anchor == nullptr || jolt_body == nullptr || !jolt_body->IsDynamic()) {
+		_release_limit_constraint(p_attachment);
+		return;
+	}
+
+	// Where the rope is anchored, and what that anchor is attached to. A static pin is a point in the
+	// world; an anchor on a static or kinematic body rides along with it, so the constraint is built
+	// against that body and follows it for free.
+	JPH::Body *anchor_body = &JPH::Body::sFixedToWorld;
+	Vector3 anchor_point = p_anchor->target;
+	// What identifies this anchor from one frame to the next. A point in the world for a static pin;
+	// for an anchor riding a body -- another hand holding the same rope, say -- the world point moves
+	// every frame while the constraint it describes does not, so the body-local offset is the thing
+	// that has to stay put.
+	Vector3 anchor_key = p_anchor->target;
+
+	if (p_anchor->mode == ATTACH_BODY) {
+		const JoltBody3D *other = p_anchor->body;
+		JPH::Body *other_jolt = (other != nullptr && other->in_space()) ? other->get_jolt_body() : nullptr;
+		if (other_jolt == nullptr) {
+			_release_limit_constraint(p_attachment);
+			return;
+		}
+		anchor_body = other_jolt;
+		anchor_key = p_anchor->local_offset;
+	}
+
+	const JPH::BodyID anchor_id = anchor_body->GetID();
+
+	// Rebuilt only when it actually describes something different. Jolt bakes the world-space points
+	// into body-local frames when the constraint is created, so a moved anchor or a re-tied knot needs
+	// a new one -- but the offsets round-trip through the scene layer unchanged every frame, so in
+	// steady state nothing here fires.
+	const bool same =
+			p_attachment.limit_constraint != nullptr &&
+			p_attachment.limit_constraint_body == jolt_body->GetID() &&
+			p_attachment.limit_constraint_anchor_body == anchor_id &&
+			p_attachment.limit_constraint_point.is_equal_approx(anchor_key) &&
+			p_attachment.limit_constraint_offset.is_equal_approx(p_attachment.local_offset);
+
+	if (same) {
+		if (!Math::is_equal_approx(p_attachment.limit_constraint_distance, p_attachment.limit_distance)) {
+			static_cast<JPH::DistanceConstraint *>(p_attachment.limit_constraint.GetPtr())->SetDistance(0.0f, p_attachment.limit_distance);
+			p_attachment.limit_constraint_distance = p_attachment.limit_distance;
+		}
+		return;
+	}
+
+	_release_limit_constraint(p_attachment);
+
+	JPH::DistanceConstraintSettings settings;
+	settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+	settings.mPoint1 = to_jolt_r(anchor_point);
+	settings.mPoint2 = to_jolt_r(p_attachment.target);
+	// One-sided, exactly as the rope's own limit is: a rope stops a body being pulled past its length
+	// and does nothing whatsoever about it moving back toward the anchor.
+	settings.mMinDistance = 0.0f;
+	settings.mMaxDistance = p_attachment.limit_distance;
+
+	JPH::TwoBodyConstraint *constraint = static_cast<JPH::TwoBodyConstraint *>(settings.Create(*anchor_body, *jolt_body));
+	if (constraint == nullptr) {
+		return;
+	}
+
+	p_attachment.limit_constraint = constraint;
+	p_attachment.limit_constraint_body = jolt_body->GetID();
+	p_attachment.limit_constraint_anchor_body = anchor_id;
+	p_attachment.limit_constraint_point = anchor_key;
+	p_attachment.limit_constraint_offset = p_attachment.local_offset;
+	p_attachment.limit_constraint_distance = p_attachment.limit_distance;
+
+	space->add_joint(constraint);
+}
+
 void JoltRope3D::_update_attachment_targets() {
 	const uint32_t count = positions.size();
 
@@ -547,6 +858,7 @@ void JoltRope3D::_update_attachment_targets() {
 		switch (attachment.mode) {
 			case ATTACH_STATIC: {
 				attachment.target = attachment.static_position;
+				attachment.holder_basis = Basis();
 				inv_masses[index] = 0.0f;
 			} break;
 
@@ -563,6 +875,7 @@ void JoltRope3D::_update_attachment_targets() {
 
 				const Transform3D body_transform(to_godot(jolt_body->GetRotation()), to_godot(jolt_body->GetPosition()));
 				attachment.target = body_transform.xform(attachment.local_offset);
+				attachment.holder_basis = body_transform.basis;
 
 				// A *dynamic* body is always solved as a real constraint, regardless of
 				// `two_way_coupling`. Hard-pinning the rope end to a dynamic body would let the
@@ -590,36 +903,100 @@ void JoltRope3D::_update_attachment_targets() {
 		}
 	}
 
-	// Second pass: pair every soft (dynamic-body) attachment with the nearest immovable anchor. A
-	// hard-pinned particle cannot move, so the distance between it and a body attachment is bounded
-	// by the rest length of the rope between them -- that bound is the whole reason a rope reads as
-	// a limit joint, and it is what stops a heavy body from simply out-massing the rope's own
-	// particles and dragging the chain apart.
+	// Second pass: give every soft (dynamic-body) attachment an anchor to be limited against.
+	//
+	// The bound is the rest length of rope between the two, and it is what stops a heavy body simply
+	// out-massing the rope's own particles and dragging the chain apart.
+	//
+	// Anchors are not only the immovable attachments. A body whose limit Jolt owns is pinned hard and
+	// its particle is immovable to the rope (see the sweep below), so it can anchor the span past it
+	// -- and it *must*, or nothing constrains that span at all. Limiting everything against the
+	// nearest hook instead leaves the rope between two attachments completely free: two hands on one
+	// rope could be pulled apart indefinitely because each was only ever measured against the hook,
+	// and a load below a grabbed point would be measured on a straight line to the hook while the
+	// rope actually has to run out to the grab and back, so the length solve dragged the rope end off
+	// the load it was tied to.
+	//
+	// Grounding therefore spreads outward from the genuinely immovable attachments, always taking the
+	// closest unanchored one next. Expanding nearest-first is what keeps every chain terminating at
+	// something that cannot move: picking anchors independently would happily point two neighbouring
+	// attachments at each other and ground neither.
 	if (cumulative_rest.size() == count) {
 		for (KeyValue<int, Attachment> &E : attachments) {
-			Attachment &attachment = E.value;
-			attachment.limit_anchor = -1;
-			attachment.limit_distance = 0.0f;
+			E.value.limit_anchor = -1;
+			E.value.limit_distance = 0.0f;
+		}
 
-			if (!attachment.soft || E.key < 0 || E.key >= (int)count) {
-				continue;
-			}
-
-			for (const KeyValue<int, Attachment> &other : attachments) {
-				if (other.value.soft || other.value.mode == ATTACH_NONE) {
-					continue;
-				}
-				if (other.key < 0 || other.key >= (int)count || other.key == E.key) {
-					continue;
-				}
-
-				const float distance = Math::abs(cumulative_rest[E.key] - cumulative_rest[other.key]);
-				if (attachment.limit_anchor < 0 || distance < attachment.limit_distance) {
-					attachment.limit_anchor = other.key;
-					attachment.limit_distance = distance;
-				}
+		LocalVector<int> anchors;
+		for (const KeyValue<int, Attachment> &E : attachments) {
+			if (!E.value.soft && E.value.mode != ATTACH_NONE && E.key >= 0 && E.key < (int)count) {
+				anchors.push_back(E.key);
 			}
 		}
+
+		while (!anchors.is_empty()) {
+			int best_key = -1;
+			int best_anchor = -1;
+			float best_distance = 0.0f;
+
+			for (const KeyValue<int, Attachment> &E : attachments) {
+				const Attachment &attachment = E.value;
+				if (!attachment.soft || attachment.limit_anchor >= 0 || E.key < 0 || E.key >= (int)count) {
+					continue;
+				}
+
+				for (int anchor : anchors) {
+					if (anchor == E.key) {
+						continue;
+					}
+
+					const float distance = Math::abs(cumulative_rest[E.key] - cumulative_rest[anchor]);
+					if (best_key < 0 || distance < best_distance) {
+						best_key = E.key;
+						best_anchor = anchor;
+						best_distance = distance;
+					}
+				}
+			}
+
+			if (best_key < 0) {
+				break;
+			}
+
+			Attachment *attachment = attachments.getptr(best_key);
+			attachment->limit_anchor = best_anchor;
+			attachment->limit_distance = best_distance;
+
+			// Only an attachment that will actually be pinned hard becomes an anchor for the next
+			// layer. One the rope merely pulls on is still free to move, so it can bound nothing.
+			if (attachment->solver_limit) {
+				anchors.push_back(best_key);
+			} else {
+				// Nothing further can ground through it, and it is anchored now, so the search shrinks
+				// on the next round either way.
+			}
+		}
+
+		// Second sweep, because the anchor an attachment settles on may be an entry the loop above had
+		// not reached yet, and looking it up needs the map to be final.
+		for (KeyValue<int, Attachment> &E : attachments) {
+			Attachment &attachment = E.value;
+			const Attachment *anchor = (attachment.soft && attachment.limit_anchor >= 0)
+					? attachments.getptr(attachment.limit_anchor)
+					: nullptr;
+			_update_limit_constraint(attachment, anchor);
+
+			// An attachment whose limit Jolt owns is pinned hard, so its particle has to be immovable
+			// like any other hard pin. Leaving it with a mass meant every other constraint -- contacts
+			// especially -- was free to shove it somewhere else, and the pin teleported it back on the
+			// next substep. Four rounds of that per frame, and the particles either side were left
+			// visibly shaking.
+			if (attachment.limit_constraint != nullptr && E.key >= 0 && E.key < (int)count) {
+				inv_masses[E.key] = 0.0f;
+			}
+		}
+	} else {
+		_release_all_limit_constraints();
 	}
 }
 
@@ -831,10 +1208,90 @@ void JoltRope3D::_update_gravity() {
 	}
 }
 
+// Damps deformation without damping motion.
+//
+// The obvious form -- scale every particle's velocity toward zero -- damps a rope that is merely
+// *moving* exactly as hard as one that is flexing, so a rope swinging as a perfectly straight line
+// bleeds energy even though nothing about it is deforming. What it should damp is the difference
+// between what the rope is doing and the rigid motion that best describes it, which is the classic
+// treatment from Mueller et al., *Position Based Dynamics*, section 3.5: recover the rope's overall
+// translation and rotation from its own momentum, then damp only the residual.
+//
+// A settled rope still stops. A swinging one keeps swinging.
+void JoltRope3D::_solve_damping(float p_step) {
+	const uint32_t count = positions.size();
+	const real_t strength = CLAMP((real_t)linear_damping * (real_t)p_step, (real_t)0.0, (real_t)1.0);
+	if (count < 2 || strength <= (real_t)0.0) {
+		return;
+	}
+
+	Vector3 centre;
+	Vector3 momentum;
+	real_t total_mass_sum = 0.0;
+
+	for (uint32_t i = 0; i < count; i++) {
+		if (inv_masses[i] <= 0.0f) {
+			// A pinned particle has infinite mass, so it would swamp the fit and, being immovable,
+			// there is nothing to damp about it either.
+			continue;
+		}
+		const real_t mass = (real_t)1.0 / (real_t)inv_masses[i];
+		centre += positions[i] * mass;
+		momentum += velocities[i] * mass;
+		total_mass_sum += mass;
+	}
+
+	if (total_mass_sum <= (real_t)ROPE_EPSILON) {
+		return;
+	}
+
+	centre /= total_mass_sum;
+	const Vector3 linear = momentum / total_mass_sum;
+
+	Vector3 angular_momentum;
+	Basis inertia;
+
+	for (uint32_t i = 0; i < count; i++) {
+		if (inv_masses[i] <= 0.0f) {
+			continue;
+		}
+		const real_t mass = (real_t)1.0 / (real_t)inv_masses[i];
+		const Vector3 offset = positions[i] - centre;
+
+		angular_momentum += offset.cross(velocities[i] * mass);
+
+		// The point-mass inertia tensor, m * (|r|^2 * I - r r^T), accumulated directly.
+		const real_t r2 = offset.length_squared();
+		for (int a = 0; a < 3; a++) {
+			for (int b = 0; b < 3; b++) {
+				inertia[a][b] += mass * ((a == b ? r2 : (real_t)0.0) - offset[a] * offset[b]);
+			}
+		}
+	}
+
+	// A perfectly straight rope of point masses has no moment of inertia about its own axis at all,
+	// which makes the tensor singular. Nudging the diagonal by a fraction of its own trace leaves the
+	// two well-conditioned axes alone and turns the degenerate one into "no rotation about it",
+	// which is exactly right -- a line of points cannot spin about the line.
+	const real_t trace = inertia[0][0] + inertia[1][1] + inertia[2][2];
+	const real_t regulariser = MAX(trace, (real_t)ROPE_EPSILON) * (real_t)1e-4;
+	for (int a = 0; a < 3; a++) {
+		inertia[a][a] += regulariser;
+	}
+
+	const Vector3 angular = inertia.inverse().xform(angular_momentum);
+
+	for (uint32_t i = 0; i < count; i++) {
+		if (inv_masses[i] <= 0.0f) {
+			continue;
+		}
+		const Vector3 rigid = linear + angular.cross(positions[i] - centre);
+		velocities[i] += (rigid - velocities[i]) * strength;
+	}
+}
+
 void JoltRope3D::_integrate(float p_step) {
 	const uint32_t count = positions.size();
-
-	const float damping_factor = MAX(0.0f, 1.0f - linear_damping * p_step);
 
 	for (uint32_t i = 0; i < count; i++) {
 		prev_positions[i] = positions[i];
@@ -846,16 +1303,44 @@ void JoltRope3D::_integrate(float p_step) {
 		velocities[i] += gravity_cache[i] * p_step;
 
 		if (drag > 0.0f) {
-			const float speed = (float)velocities[i].length();
-			if (speed > ROPE_EPSILON) {
-				// Quadratic drag, integrated explicitly but clamped so it can never reverse the
-				// velocity it is meant to oppose.
-				const float decel = MIN(drag * speed * p_step, speed);
-				velocities[i] -= velocities[i] * (decel / speed);
+			const Vector3 velocity = velocities[i];
+			const real_t speed = velocity.length();
+
+			if (speed > (real_t)ROPE_EPSILON) {
+				// Aerodynamic drag: quadratic in speed, as real drag is, and split against the rope's
+				// own direction because a cable's resistance is dominated by the component across its
+				// axis. The previous form reduced to `v *= 1 - drag * h`, which is linear and was
+				// simply a second copy of `linear_damping` under a different name.
+				Vector3 tangent;
+				if (i + 1 < count) {
+					tangent += positions[i + 1] - positions[i];
+				}
+				if (i > 0) {
+					tangent += positions[i] - positions[i - 1];
+				}
+
+				Vector3 deceleration;
+				if (tangent.length_squared() > (real_t)ROPE_EPSILON) {
+					tangent.normalize();
+					const Vector3 along = tangent * velocity.dot(tangent);
+					const Vector3 across = velocity - along;
+					deceleration = across * (across.length() * (real_t)drag) +
+							along * (along.length() * (real_t)drag * (real_t)ROPE_TANGENTIAL_DRAG_RATIO);
+				} else {
+					deceleration = velocity * (speed * (real_t)drag);
+				}
+
+				// Clamped so an explicit integration of a quadratic law can never reverse the very
+				// velocity it is opposing.
+				const real_t change = deceleration.length() * (real_t)p_step;
+				if (change > speed) {
+					deceleration *= speed / change;
+				}
+
+				velocities[i] -= deceleration * p_step;
 			}
 		}
 
-		velocities[i] *= damping_factor;
 		positions[i] += velocities[i] * p_step;
 	}
 }
@@ -1046,17 +1531,26 @@ void JoltRope3D::_solve_lra() {
 }
 
 void JoltRope3D::_solve_attachments(float p_step) {
-	for (const KeyValue<int, Attachment> &E : attachments) {
-		const Attachment &attachment = E.value;
+	for (KeyValue<int, Attachment> &E : attachments) {
+		Attachment &attachment = E.value;
 		const int index = E.key;
 
 		if (index < 0 || index >= (int)positions.size() || attachment.mode == ATTACH_NONE) {
 			continue;
 		}
 
-		if (!attachment.soft) {
-			// Hard pin: static, kinematic, or a dynamic body without two-way coupling.
+		if (!attachment.soft || attachment.limit_constraint != nullptr) {
+			// Hard pin: static, kinematic, or a dynamic body whose limit Jolt now owns.
+			//
+			// Once there is a real constraint on the body, the rope has nothing left to tell it. The
+			// soft path below would still push on it every substep out of the residual gap between the
+			// knot and the rope's last particle, and that push is derived from a lagging measurement,
+			// so it is dissipative -- it cost a swinging load 15 % of its energy over fifteen seconds
+			// against 0.75 % without it. Splitting the two responsibilities is what the constraint was
+			// for: the body owns where the rope end is, and the constraint owns how far the body may
+			// go.
 			positions[index] = attachment.target;
+			_solve_direction_lock(attachment, index, p_step);
 			continue;
 		}
 
@@ -1090,16 +1584,24 @@ void JoltRope3D::_solve_attachments(float p_step) {
 		positions[index] += correction * w_particle;
 
 		// The body takes the other share of the correction. Recording it on the proxy is what stops
-		// the next substep from asking for the whole thing again.
+		// the next substep from asking for the whole thing again; recording the impulse separately is
+		// what gets handed back to Jolt at the end of the frame.
 		info.position_delta -= correction * info.inv_mass;
 		info.rotation_delta -= info.inv_inertia.xform(lever.cross(correction));
+
+		info.linear_impulse -= correction / frame_step;
+		info.angular_impulse -= lever.cross(correction) / frame_step;
+
+		_solve_direction_lock(attachment, index, p_step);
 
 		// The limit-joint constraint. Solved against the body alone, because the anchor it is
 		// measured from is immovable by construction. Without it the rope can only resist through
 		// its own particles, whose combined mass is usually far less than the body's -- so a heavy
 		// body would keep falling, the rope would be pulled straight past its rest length, and the
 		// long-range pass would tear it open in the middle.
-		if (attachment.limit_anchor < 0 || !inextensible) {
+		// Skipped when Jolt owns this limit: between them the two would take the same violation out of
+		// the body twice.
+		if (attachment.limit_anchor < 0 || !inextensible || attachment.limit_constraint != nullptr) {
 			continue;
 		}
 
@@ -1119,12 +1621,126 @@ void JoltRope3D::_solve_attachments(float p_step) {
 			continue;
 		}
 
-		// The full excess is removed from the body: it is the only thing here that can move.
-		const Vector3 span_correction = span_normal * (-(span_length - attachment.limit_distance));
+		// The body is the only thing here that can move, but a rigid body answers a positional
+		// constraint with translation *and* rotation, and `span_w` is precisely the split between
+		// them. So the excess is turned into a generalized impulse first and each channel then takes
+		// its own share -- applying the whole excess as translation *and* the rotation on top
+		// over-corrects by `span_w / inv_mass`. That factor is 1 when the lever from the centre of
+		// mass to the attachment happens to lie along the rope, which is exactly the case for a load
+		// hanging straight below its knot, and grows as the rope swings away from it. It is why the
+		// old form read as a rope that bounced while swinging and behaved perfectly at rest.
+		const Vector3 span_impulse = span_normal * (-(span_length - attachment.limit_distance) / span_w);
 
-		info.position_delta += span_correction;
-		info.rotation_delta += info.inv_inertia.xform(span_lever.cross(span_correction)) / span_w;
-		positions[index] += span_correction;
+		const Vector3 anchor_before = origin + span;
+
+		// Proxy only. Unlike the pin above, this constraint contributes no positional impulse of its
+		// own: `_solve_velocities()` solves the same limit at velocity level with the position error
+		// folded in as a bias, which is the only way to apply both without correcting the same
+		// violation twice and flinging the body back past the constraint.
+		info.position_delta += span_impulse * info.inv_mass;
+		info.rotation_delta += info.inv_inertia.xform(span_lever.cross(span_impulse));
+
+		// Carry the particle along by whatever the attachment point on the body actually moved,
+		// rather than by the correction, so the pin stays exact instead of merely close.
+		positions[index] += info.displaced(attachment.target) - anchor_before;
+	}
+}
+
+// Holds the direction the rope leaves an attachment in, so the knot behaves like a cable gland or a
+// splice rather than a hook.
+//
+// This is a *bending* boundary condition, not a twist one, and it works with twist switched off. The
+// mechanism is the standard trick for clamping the end of a rod in a position-based solver: invent a
+// ghost particle just beyond the attachment, rigidly carried by whatever holds the rope, and run the
+// ordinary bending constraint through the triple it forms with the first two real particles. Three
+// collinear points means the rope leaves along the captured direction, so no new constraint is
+// needed -- only a new place to apply the one already here.
+void JoltRope3D::_solve_direction_lock(Attachment &p_attachment, int p_index, float p_step) {
+	if (!p_attachment.lock_direction) {
+		return;
+	}
+
+	const uint32_t count = positions.size();
+	const int neighbour = (p_index == 0) ? 1 : p_index - 1;
+	if (neighbour < 0 || neighbour >= (int)count) {
+		return;
+	}
+
+	ColliderInfo *info = (p_attachment.soft && p_attachment.collider >= 0) ? &colliders[p_attachment.collider] : nullptr;
+
+	const Vector3 anchor = (info != nullptr) ? info->displaced(p_attachment.target) : p_attachment.target;
+
+	if (!p_attachment.direction_captured) {
+		// Fasten it in the direction the rope already runs, so switching the lock on does not snap
+		// the rope to some canonical exit angle.
+		Vector3 exit = positions[neighbour] - anchor;
+		if (exit.length_squared() < (real_t)ROPE_EPSILON) {
+			return;
+		}
+		p_attachment.locked_direction = p_attachment.holder_basis.transposed().xform(exit.normalized());
+		p_attachment.direction_captured = true;
+	}
+
+	Vector3 exit = p_attachment.holder_basis.xform(p_attachment.locked_direction);
+	if (info != nullptr) {
+		// Carry the proxy's rotation, so a body that has already turned this substep is seen to have
+		// taken its exit direction with it.
+		exit += info->rotation_delta.cross(exit);
+	}
+	if (exit.length_squared() < (real_t)ROPE_EPSILON) {
+		return;
+	}
+	exit.normalize();
+
+	// The ghost sits one segment back along the exit direction, which puts the three points in a
+	// straight line exactly when the rope is leaving the way it was fastened.
+	const uint32_t segment = (p_index == 0) ? 0 : (uint32_t)(p_index - 1);
+	const float spacing = (segment < rest_lengths.size()) ? rest_lengths[segment] : 1.0f;
+	const Vector3 ghost = anchor - exit * spacing;
+
+	const Vector3 offset = positions[p_index] - (ghost + positions[neighbour]) * 0.5f;
+	const float error = (float)offset.length();
+	if (error < ROPE_EPSILON) {
+		return;
+	}
+	const Vector3 normal = offset / error;
+
+	const float w_index = inv_masses[p_index];
+	const float w_neighbour = inv_masses[neighbour];
+
+	// The ghost is not free: it is welded to the holder, so its share of the constraint costs
+	// whatever moving that holder costs. For a static pin that is nothing, which is what makes a
+	// rope tied to a wall clamp rigidly.
+	Vector3 ghost_lever;
+	float w_ghost = 0.0f;
+	if (info != nullptr) {
+		ghost_lever = ghost - (info->com + info->position_delta);
+		const Vector3 lever_cross = ghost_lever.cross(normal);
+		w_ghost = info->inv_mass + (float)lever_cross.dot(info->inv_inertia.xform(lever_cross));
+	}
+
+	// Gradient magnitudes are 1 for the middle point and 1/2 for each outer one, so the outer two
+	// contribute a quarter of their inverse mass.
+	const float w = w_index + 0.25f * (w_neighbour + w_ghost);
+	if (w <= 0.0f) {
+		return;
+	}
+
+	const float alpha = p_attachment.direction_compliance / (p_step * p_step);
+	const float delta_lambda = -error / (w + alpha);
+	const Vector3 correction = normal * delta_lambda;
+
+	positions[p_index] += correction * w_index;
+	positions[neighbour] -= correction * (0.5f * w_neighbour);
+
+	if (info != nullptr) {
+		const Vector3 ghost_impulse = correction * -0.5f;
+
+		info->position_delta += ghost_impulse * info->inv_mass;
+		info->rotation_delta += info->inv_inertia.xform(ghost_lever.cross(ghost_impulse));
+
+		info->linear_impulse += ghost_impulse / frame_step;
+		info->angular_impulse += ghost_lever.cross(ghost_impulse) / frame_step;
 	}
 }
 
@@ -1208,6 +1824,9 @@ void JoltRope3D::_solve_collisions(float p_step) {
 			// sees a surface that has already yielded.
 			info.position_delta -= impulse * info.inv_mass;
 			info.rotation_delta -= info.inv_inertia.xform(lever.cross(impulse));
+
+			info.linear_impulse -= impulse / frame_step;
+			info.angular_impulse -= lever.cross(impulse) / frame_step;
 		}
 
 		// Position-level friction, per Macklin et al. "Unified Particle Physics". Damping the
@@ -1239,6 +1858,352 @@ void JoltRope3D::_update_velocities(float p_step) {
 	}
 }
 
+// Rotates `p_normal` by the smallest rotation carrying `p_from` to `p_to`. Both tangents are unit
+// length, so this is Rodrigues with the angle recovered from the cross and dot products.
+static Vector3 rope_transport(const Vector3 &p_normal, const Vector3 &p_from, const Vector3 &p_to) {
+	const Vector3 axis = p_from.cross(p_to);
+	const real_t sine = axis.length();
+	const real_t cosine = p_from.dot(p_to);
+
+	if (sine < (real_t)ROPE_EPSILON) {
+		// Parallel, or antiparallel and therefore ambiguous -- but a rope segment cannot reverse
+		// inside one frame, so treating it as unchanged is right in both cases.
+		return p_normal;
+	}
+
+	const Vector3 unit_axis = axis / sine;
+	const real_t angle = Math::atan2(sine, cosine);
+	const real_t c = Math::cos(angle);
+	const real_t s = Math::sin(angle);
+
+	return p_normal * c + unit_axis.cross(p_normal) * s + unit_axis * (unit_axis.dot(p_normal) * (1.0 - c));
+}
+
+// Rotates `p_normal` about the unit axis `p_axis` by `p_angle`. The two are perpendicular here, so
+// the axis-aligned term of Rodrigues drops out.
+static Vector3 rope_roll(const Vector3 &p_normal, const Vector3 &p_axis, real_t p_angle) {
+	const real_t c = Math::cos(p_angle);
+	const real_t s = Math::sin(p_angle);
+
+	return p_normal * c + p_axis.cross(p_normal) * s;
+}
+
+// Re-perpendicularises `p_normal` against `p_tangent` and normalises it, falling back to any
+// perpendicular if the two have collapsed onto each other.
+static Vector3 rope_orthonormalize(const Vector3 &p_normal, const Vector3 &p_tangent) {
+	Vector3 normal = p_normal - p_tangent * p_normal.dot(p_tangent);
+
+	if (normal.length_squared() < (real_t)ROPE_EPSILON) {
+		const Vector3 reference = Math::abs(p_tangent.y) > (real_t)0.9 ? Vector3(1, 0, 0) : Vector3(0, 1, 0);
+		normal = reference.cross(p_tangent);
+	}
+
+	return normal.normalized();
+}
+
+void JoltRope3D::_update_frames() {
+	const uint32_t count = positions.size();
+
+	if (count < 2) {
+		ref_normals.clear();
+		ref_tangents.clear();
+		ref_frame_valid = false;
+		return;
+	}
+
+	const uint32_t segments = count - 1;
+
+	if (ref_normals.size() != segments) {
+		ref_normals.resize(segments);
+		ref_tangents.resize(segments);
+		ref_frame_valid = false;
+	}
+
+	Vector3 tangent = positions[1] - positions[0];
+	if (tangent.length_squared() < (real_t)ROPE_EPSILON) {
+		tangent = Vector3(0, 1, 0);
+	}
+	tangent.normalize();
+
+	if (ref_frame_valid) {
+		// Segment 0 is the only frame carried in time, and it is carried by the smallest rotation
+		// that accounts for how its tangent moved. Everything else follows from it along the rope,
+		// so this single step is what makes the whole material frame temporally coherent.
+		ref_normals[0] = rope_orthonormalize(rope_transport(ref_normals[0], ref_tangents[0], tangent), tangent);
+	} else {
+		const Vector3 reference = Math::abs(tangent.y) > (real_t)0.9 ? Vector3(1, 0, 0) : Vector3(0, 1, 0);
+		ref_normals[0] = rope_orthonormalize(reference.cross(tangent), tangent);
+	}
+	ref_tangents[0] = tangent;
+
+	for (uint32_t e = 1; e < segments; e++) {
+		Vector3 next = positions[e + 1] - positions[e];
+		if (next.length_squared() < (real_t)ROPE_EPSILON) {
+			next = ref_tangents[e - 1];
+		} else {
+			next.normalize();
+		}
+
+		// Parallel transport along the rope. Because every segment's frame is derived from its
+		// predecessor this way, adjacent frames differ by no rotation about the tangent at all --
+		// which is what lets twist be a single scalar per segment rather than a frame comparison.
+		ref_normals[e] = rope_orthonormalize(rope_transport(ref_normals[e - 1], ref_tangents[e - 1], next), next);
+		ref_tangents[e] = next;
+	}
+
+	ref_frame_valid = true;
+}
+
+Vector<Vector3> JoltRope3D::get_points_interpolated(float p_fraction) const {
+	const uint32_t count = positions.size();
+
+	if (!render_positions_valid || render_positions.size() != count) {
+		return get_points();
+	}
+
+	Vector<Vector3> result;
+	result.resize((int)count);
+	Vector3 *write = result.ptrw();
+
+	const real_t fraction = CLAMP((real_t)p_fraction, (real_t)0.0, (real_t)1.0);
+	for (uint32_t i = 0; i < count; i++) {
+		write[i] = render_positions[i].lerp(positions[i], fraction);
+	}
+
+	return result;
+}
+
+void JoltRope3D::reset_interpolation() {
+	render_positions_valid = false;
+}
+
+Vector<Vector3> JoltRope3D::get_point_normals() const {
+	const uint32_t count = positions.size();
+
+	Vector<Vector3> result;
+	if (count < 2 || ref_normals.size() != count - 1) {
+		return result;
+	}
+
+	result.resize((int)count);
+	Vector3 *write = result.ptrw();
+
+	// The drawn frame is the *material* frame -- reference rolled by however much the rope is twisted
+	// there -- so the surface shows the torsion the solver is carrying rather than an independent
+	// guess at it.
+	const bool twisted = twist_angles.size() == count - 1 && twist_compliance < ROPE_TWIST_DISABLED_COMPLIANCE;
+
+	auto material = [&](uint32_t p_segment) {
+		return twisted
+				? rope_roll(ref_normals[p_segment], ref_tangents[p_segment], (real_t)twist_angles[p_segment])
+				: ref_normals[p_segment];
+	};
+
+	// Frames live on segments, rings live on particles. An interior particle takes the sum of the two
+	// segments meeting there, which is the cheap stand-in for slerping between them and is exact
+	// enough for a chain this smooth; the ends take their single neighbour.
+	write[0] = material(0);
+	write[count - 1] = material(count - 2);
+
+	for (uint32_t i = 1; i < count - 1; i++) {
+		Vector3 tangent = positions[i + 1] - positions[i - 1];
+		if (tangent.length_squared() < (real_t)ROPE_EPSILON) {
+			write[i] = material(i - 1);
+			continue;
+		}
+		tangent.normalize();
+		write[i] = rope_orthonormalize(material(i - 1) + material(i), tangent);
+	}
+
+	return result;
+}
+
+// Works out, for every locked attachment, what roll the thing holding the rope is currently asking
+// for. Runs after `_update_frames()`, because it is measured against this frame's reference.
+void JoltRope3D::_update_twist_targets() {
+	const uint32_t count = positions.size();
+	const uint32_t segments = count - 1;
+
+	for (KeyValue<int, Attachment> &E : attachments) {
+		Attachment &attachment = E.value;
+		attachment.twist_locked = false;
+
+		if (!attachment.lock_twist || attachment.mode == ATTACH_NONE) {
+			continue;
+		}
+
+		const int index = E.key;
+		if (index < 0 || index >= (int)count) {
+			continue;
+		}
+
+		// A lock lives on a segment, not a particle. The last particle has no segment of its own, so
+		// it takes the one arriving at it.
+		const uint32_t segment = (index >= (int)segments) ? segments - 1 : (uint32_t)index;
+		attachment.twist_segment = (int)segment;
+
+		const Vector3 &tangent = ref_tangents[segment];
+		const Vector3 &reference = ref_normals[segment];
+
+		if (!attachment.twist_captured) {
+			// Fasten the rope exactly as it stands. Anything else would snap it to some canonical
+			// roll the moment the lock was switched on.
+			const Vector3 material = rope_roll(reference, tangent, (real_t)twist_angles[segment]);
+			attachment.locked_normal = attachment.holder_basis.transposed().xform(material);
+			attachment.twist_target = (real_t)twist_angles[segment];
+			attachment.twist_captured = true;
+		}
+
+		Vector3 wanted = attachment.holder_basis.xform(attachment.locked_normal);
+		wanted -= tangent * wanted.dot(tangent);
+		if (wanted.length_squared() < (real_t)ROPE_EPSILON) {
+			// The holder has turned its locked direction onto the rope's own axis, so there is no
+			// roll left to read there. Hold last frame's target rather than snapping to an arbitrary
+			// one.
+			attachment.twist_locked = true;
+			continue;
+		}
+		wanted.normalize();
+
+		const real_t angle = Math::atan2(tangent.dot(reference.cross(wanted)), reference.dot(wanted));
+
+		// Unwrap onto the running total. `angle` only ever comes back in (-pi, pi], so without this a
+		// rope wound past half a turn would appear to spring back.
+		// `Math::PI` is a double while `real_t` is a float in a single-precision build, and `wrapf()`
+		// overloads on both -- so the bounds have to be narrowed explicitly or the call matches neither
+		// candidate cleanly.
+		const real_t half_turn = (real_t)Math::PI;
+		const real_t wrapped = Math::wrapf(attachment.twist_target, -half_turn, half_turn);
+		attachment.twist_target += Math::wrapf(angle - wrapped, -half_turn, half_turn);
+		attachment.twist_locked = true;
+	}
+}
+
+// Solves the twist chain exactly, with the Thomas algorithm.
+//
+// Twist is one-dimensional, has no unilateral cases and -- in this reduced formulation -- does not
+// feed back into the centreline, so the implicit-Euler system for it is symmetric, positive definite
+// and tridiagonal. That is worth taking advantage of: a direct solve costs the same as a single
+// Gauss-Seidel sweep and is *exact*, so torsional stiffness is unconditionally stable at any value
+// and any timestep. Iterating instead would have been badly conditioned for no reason, because a
+// rope segment's torsional inertia is minute -- of order 1e-5 kg m^2 at the default radius and mass.
+void JoltRope3D::_solve_twist(float p_step) {
+	const uint32_t count = positions.size();
+	if (count < 2 || twist_compliance >= ROPE_TWIST_DISABLED_COMPLIANCE) {
+		return;
+	}
+
+	const uint32_t segments = count - 1;
+	if (ref_normals.size() != segments || twist_angles.size() != segments) {
+		return;
+	}
+
+	_update_twist_targets();
+
+	const float stiffness = 1.0f / MAX(twist_compliance, 1e-9f);
+	const float inv_step_squared = 1.0f / (p_step * p_step);
+	const float segment_mass = total_mass / (float)count;
+	// A thin cylinder about its own axis. Floored so a massless or zero-radius rope still gives a
+	// conditioned system rather than a singular one.
+	const float inertia = MAX(0.5f * segment_mass * radius * radius, 1e-8f);
+	const float mass_term = inertia * inv_step_squared;
+	const float retain = MAX(0.0f, 1.0f - twist_damping * p_step);
+
+	for (uint32_t e = 0; e < segments; e++) {
+		twist_predicted[e] = twist_angles[e] + p_step * twist_velocities[e] * retain;
+	}
+
+	for (uint32_t e = 0; e < segments; e++) {
+		const Attachment *lock = nullptr;
+		for (const KeyValue<int, Attachment> &E : attachments) {
+			if (E.value.twist_locked && E.value.twist_segment == (int)e) {
+				lock = &E.value;
+				break;
+			}
+		}
+
+		float lower = (e > 0) ? -stiffness : 0.0f;
+		float upper = (e + 1 < segments) ? -stiffness : 0.0f;
+		float row_mass = mass_term;
+		float predicted = twist_predicted[e];
+
+		if (lock != nullptr) {
+			// Where the holder's own rotation has put this segment, ignoring the rope.
+			predicted = (float)lock->twist_target;
+
+			const ColliderInfo *info = (lock->collider >= 0) ? &colliders[lock->collider] : nullptr;
+			const real_t inv_axis_inertia = (info != nullptr && info->dynamic)
+					? ref_tangents[e].dot(info->inv_inertia.xform(ref_tangents[e]))
+					: (real_t)0.0;
+
+			if (inv_axis_inertia > (real_t)ROPE_EPSILON) {
+				// A dynamic holder is just another element of the twist chain, only far heavier. Its
+				// inertia goes into the row rather than the row being pinned outright, which is what
+				// keeps the coupling implicit and therefore stable at any stiffness.
+				//
+				// Pinning the row and handing the holder the leftover torque afterwards is an
+				// explicit spring, and it diverges exactly as one would expect: at zero compliance a
+				// hanging load spun up five orders of magnitude past its initial rate within seconds.
+				row_mass = (float)(1.0 / inv_axis_inertia) * inv_step_squared;
+			} else {
+				// Static, kinematic, or spinning about an axis it has no inertia around: genuinely
+				// immovable, so this is a Dirichlet row and the sweep below carries it into its
+				// neighbours as a known value with no special casing at all.
+				lower = 0.0f;
+				upper = 0.0f;
+				row_mass = 1.0f;
+			}
+		}
+
+		const float diagonal = row_mass - lower - upper;
+		const float rhs = row_mass * predicted;
+
+		const float pivot = diagonal - lower * ((e > 0) ? twist_scratch_c[e - 1] : 0.0f);
+		if (Math::abs(pivot) < (float)ROPE_EPSILON) {
+			return;
+		}
+
+		twist_scratch_c[e] = upper / pivot;
+		twist_scratch_d[e] = (rhs - lower * ((e > 0) ? twist_scratch_d[e - 1] : 0.0f)) / pivot;
+	}
+
+	for (uint32_t s = segments; s-- > 0;) {
+		const float next = (s + 1 < segments) ? twist_angles[s + 1] : 0.0f;
+		const float solved = twist_scratch_d[s] - twist_scratch_c[s] * next;
+		twist_velocities[s] = (solved - twist_angles[s]) / p_step;
+		twist_angles[s] = solved;
+	}
+
+	// The rope and its holder share a degree of freedom at a lock, so once the chain is solved the
+	// holder has to be brought to the answer. The rope cannot rotate a Jolt body directly, so as
+	// everywhere else that becomes a velocity change -- and because the holder's inertia was part of
+	// the solve, the angle it is being asked to make up is already bounded.
+	//
+	// This is the whole point of the feature. Without it a load hangs there spinning freely however
+	// stiff the rope is set.
+	for (const KeyValue<int, Attachment> &E : attachments) {
+		const Attachment &attachment = E.value;
+		if (!attachment.twist_locked || attachment.collider < 0) {
+			continue;
+		}
+
+		ColliderInfo &info = colliders[attachment.collider];
+		if (!info.dynamic) {
+			continue;
+		}
+
+		const uint32_t e = (uint32_t)attachment.twist_segment;
+		const Vector3 &axis = ref_tangents[e];
+		const real_t inv_axis_inertia = axis.dot(info.inv_inertia.xform(axis));
+		if (inv_axis_inertia <= (real_t)ROPE_EPSILON) {
+			continue;
+		}
+
+		const real_t correction = (real_t)twist_angles[e] - attachment.twist_target;
+		info.angular_impulse += axis * ((real_t)(1.0 / inv_axis_inertia) * correction / (real_t)p_step);
+	}
+}
+
 void JoltRope3D::_update_bounds() {
 	const uint32_t count = positions.size();
 	if (count == 0) {
@@ -1253,75 +2218,165 @@ void JoltRope3D::_update_bounds() {
 	bounds.grow_by(radius);
 }
 
-// Turns a correction the rope wants applied to a rigid body's pose into a velocity change that can
-// never add energy.
+// Velocity-level constraint pass, run once after the position substeps.
 //
-// The rope has no authority to move a Jolt body directly -- Jolt has already finished stepping by
-// the time the rope runs -- so all it can do is change velocity. The naive conversion,
-// `v += correction / dt`, is wrong in a way that is very visible: the body keeps whatever velocity
-// carried it out of reach *and* gains a full inward velocity on top of it, so it is flung back past
-// the constraint, overshoots, and rings. That is the violent bouncing an `inextensible` rope shows
-// when a heavy body swings outside its reach, and the same term is what lets a spring-driven body
-// pressing into a rope get launched off it.
+// A positional solver that runs *after* Jolt has stepped cannot remove the velocity Jolt already
+// gave a body -- it can only decide where the body should have ended up. So a load that swings out
+// of reach arrives with its entire approach speed intact, and if all the rope does is push it back,
+// that speed carries it straight out again on the next frame. The result is a sawtooth in the
+// along-rope velocity that reads as bouncing, and it only appears under motion -- which is exactly
+// why the same load hanging still looks perfect.
 //
-// The change is split into two terms instead, both along the correction direction:
-//
-//  - Cancel exactly the component of the body's own velocity that is fighting the correction. This
-//    is what a real inelastic constraint does; it only ever removes energy, it brings the body to
-//    rest against the constraint rather than reversing it, and because the correction points along
-//    the rope it leaves tangential swing completely alone.
-//  - Add a small fraction of the positional error on top, so whatever violation is left drains away
-//    over a few frames rather than being snapped out in one.
-//
-// Note that the result is deliberately *not* clamped to the positional error. The two terms measure
-// different things: on the frame a falling load first crosses the limit the error is only the
-// fraction of the frame it spent past it, while the velocity that has to go is the body's whole
-// approach speed. Clamping to the error stops far too little on that frame, leaves the body to sink
-// further in, and then over-corrects on the frames after -- which reads as a bounce. `max_reaction_
-// impulse` bounds the second term only, for the reasons given at its use below.
-static Vector3 rope_reaction_velocity(const Vector3 &p_correction, const Vector3 &p_body_velocity, float p_step, float p_max_recovery) {
-	const Vector3 wanted = p_correction / p_step;
-	const real_t error_rate = wanted.length();
-	if (error_rate < (real_t)ROPE_EPSILON) {
-		return Vector3();
+// Everything here works against the body's *real* Jolt pose rather than the substep proxy. The proxy
+// is a bookkeeping device for making the position solve converge; it is never applied to Jolt, so
+// the error this pass has to answer for is the one measured against the real pose.
+void JoltRope3D::_solve_velocities() {
+	for (const KeyValue<int, Attachment> &E : attachments) {
+		const Attachment &attachment = E.value;
+		const int index = E.key;
+
+		if (!attachment.soft || index < 0 || index >= (int)positions.size()) {
+			continue;
+		}
+
+		ColliderInfo &info = colliders[attachment.collider];
+		if (!info.dynamic) {
+			continue;
+		}
+
+		// Nothing has been written back to Jolt yet, so the body's velocity for this pass is the one
+		// it will have once the positional reaction lands.
+		Vector3 body_linear = info.linear_velocity + info.linear_impulse * info.inv_mass;
+		Vector3 body_angular = info.angular_velocity + info.inv_inertia.xform(info.angular_impulse);
+
+		const Vector3 lever = attachment.target - info.com;
+
+		// The limit joint, against the immovable anchor the rope's rest length is measured from.
+		// One-sided on purpose: a rope resists being pulled past its length and does nothing at all
+		// about a load moving back toward the anchor, because that is a rope going slack.
+		//
+		// This is solved *predictively* rather than correctively. The obvious formulation -- wait for
+		// the body to end up outside the limit, then remove its outward velocity and add a bias to
+		// drag it back -- has two costs that are hard to tune away. The bias never converges, because
+		// the rope cannot move a Jolt body and so a fresh error appears every frame, and it settles
+		// at whatever offset makes the correction match the drift: measured at two centimetres past
+		// the limit on a swinging load, with the rope's last particle trailing the body it was tied
+		// to by exactly that much. Worse, a term that permanently drags on a body is a term that
+		// permanently does work on it, which quietly drained a freely rotating load.
+		//
+		// Asking instead where the body will *be* removes both. Jolt integrates in a straight line,
+		// so requiring that the next step land the attachment point back on the limit sphere,
+		//
+		//     |d + v h| = limit
+		//
+		// and solving for the radial part of `v` with the tangential part left alone gives
+		//
+		//     n.v = (limit^2 - L^2 - |v_t|^2 h^2) / (2 L h)
+		//
+		// which is a target rate, not a correction. It handles slack for free -- while the rope has
+		// length to spare the target is positive and this does nothing -- and it brakes a load
+		// arriving fast over however many frames it takes to stop exactly at full extension, instead
+		// of letting it overshoot and then hauling it back.
+		if (attachment.limit_anchor < 0 || !inextensible || attachment.limit_constraint != nullptr) {
+			continue;
+		}
+
+		const Vector3 span = attachment.target - positions[attachment.limit_anchor];
+		const float span_length = (float)span.length();
+		if (span_length < ROPE_EPSILON) {
+			continue;
+		}
+
+		const Vector3 span_normal = span / span_length;
+		const Vector3 point_velocity = body_linear + body_angular.cross(lever);
+		const real_t separating = point_velocity.dot(span_normal);
+
+		const Vector3 tangential = point_velocity - span_normal * separating;
+		const real_t limit_squared = (real_t)attachment.limit_distance * (real_t)attachment.limit_distance;
+		const real_t travel = tangential.length_squared() * (real_t)frame_step * (real_t)frame_step;
+
+		real_t target = (limit_squared - (real_t)span_length * (real_t)span_length - travel) /
+				((real_t)2.0 * (real_t)span_length * (real_t)frame_step);
+
+		// A body that is already well outside its limit -- teleported, or spawned there -- would
+		// otherwise be asked for whatever speed clears the whole error in one frame. Reeling it in at
+		// a bounded rate is the only part of this that is a choice rather than a consequence.
+		//
+		// Note that raising this does *not* help a body whose load arrives through another physics
+		// constraint. That constraint is re-solved from scratch every step and overwrites whatever the
+		// rope wrote, so no reel-in rate can win against it. `ROPE_ATTACHMENT_SOLVER_LIMIT` is the
+		// answer there, and it bypasses this path entirely.
+		target = MAX(target, -(real_t)ROPE_MAX_REEL_IN_SPEED);
+
+		if (separating <= target) {
+			continue;
+		}
+
+		const Vector3 lever_cross = lever.cross(span_normal);
+		const float span_w = info.inv_mass + (float)lever_cross.dot(info.inv_inertia.xform(lever_cross));
+		if (span_w <= 0.0f) {
+			continue;
+		}
+
+		const Vector3 impulse = span_normal * (-(float)(separating - target) / span_w);
+
+		info.linear_impulse += impulse;
+		info.angular_impulse += lever.cross(impulse);
 	}
-
-	const Vector3 direction = wanted / error_rate;
-	const real_t opposing = MAX((real_t)0.0, -p_body_velocity.dot(direction));
-
-	real_t recovery = (real_t)ROPE_REACTION_RELAXATION * error_rate;
-	if (p_max_recovery > 0.0f) {
-		recovery = MIN(recovery, (real_t)p_max_recovery);
-	}
-
-	return direction * (opposing + recovery);
 }
 
+// Relaxes and bounds the *positional* half of the reaction, before `_solve_velocities()` adds the
+// velocity half on top.
+void JoltRope3D::_finalize_reactions() {
+	for (ColliderInfo &info : colliders) {
+		if (!info.dynamic) {
+			continue;
+		}
+
+		info.linear_impulse *= (real_t)ROPE_REACTION_RELAXATION;
+		info.angular_impulse *= (real_t)ROPE_REACTION_RELAXATION;
+
+		if (max_reaction_impulse <= 0.0f) {
+			continue;
+		}
+
+		const real_t magnitude = info.linear_impulse.length();
+		if (magnitude <= (real_t)max_reaction_impulse) {
+			continue;
+		}
+
+		// Both accumulators are built from the same constraint impulses, so they are scaled together
+		// -- clamping the translation alone would leave a spin behind that no longer corresponds to
+		// any force the rope is applying.
+		const real_t scale = (real_t)max_reaction_impulse / magnitude;
+		info.linear_impulse *= scale;
+		info.angular_impulse *= scale;
+	}
+}
+
+// Hands the accumulated constraint impulse back to Jolt.
+//
+// The rope has no authority to move a Jolt body directly -- Jolt has already finished stepping by
+// the time the rope runs -- so all it can do is change velocity. An impulse converts to exactly that
+// with no fudge factor: divide by the mass. Everything that decides *how much* has happened by now,
+// in the two functions above.
 void JoltRope3D::_apply_reactions() {
 	JPH::BodyInterface &body_iface = space->get_body_iface();
 
 	for (ColliderInfo &info : colliders) {
-		// The proxy already holds exactly what the rope decided this body should do over the frame,
-		// so the velocity that produces that displacement is the reaction -- no mass term needed,
-		// and no ambiguity.
-		//
-		// Deriving the reaction from the individual positional corrections instead does not work.
-		// Those corrections mean two different things depending on the situation: for a taut rope
-		// they converge and their sum is the real displacement, but for a slack one the end particle
-		// simply drifts under gravity and is re-fetched every substep, so the same sum is mostly
-		// gravity being counted over and over. Turning that into an impulse holds the body up in
-		// mid-air against its own weight.
-		const Vector3 position_correction = info.position_delta;
-		const Vector3 rotation_correction = info.rotation_delta;
+		const Vector3 linear_impulse = info.linear_impulse;
+		const Vector3 angular_impulse = info.angular_impulse;
 
 		info.position_delta = Vector3();
 		info.rotation_delta = Vector3();
+		info.linear_impulse = Vector3();
+		info.angular_impulse = Vector3();
 
 		if (!info.dynamic) {
 			continue;
 		}
 
-		if (position_correction.length_squared() < (real_t)ROPE_EPSILON && rotation_correction.length_squared() < (real_t)ROPE_EPSILON) {
+		if (linear_impulse.length_squared() < (real_t)ROPE_EPSILON && angular_impulse.length_squared() < (real_t)ROPE_EPSILON) {
 			continue;
 		}
 
@@ -1330,37 +2385,8 @@ void JoltRope3D::_apply_reactions() {
 			continue;
 		}
 
-		// Ceiling on the *recovery* half of the reaction only -- the half that pushes a body back
-		// into a legal pose and is therefore the only half that can add energy. It is expressed as
-		// an impulse, so dividing through by the body's mass turns it into a speed.
-		//
-		// The velocity-cancelling half is deliberately left uncapped. Capping it does not make
-		// anything safer: it can only ever bring the body to rest against the constraint, never push
-		// it past. What capping it *does* do is stop a heavy load dead, so it sinks further past the
-		// limit, and the error it builds up on the way in comes back out later as a rebound. That
-		// was the violent bouncing on an `inextensible` rope: the reaction cap, not the constraint.
-		const float max_recovery = (max_reaction_impulse > 0.0f && info.inv_mass > 0.0f) ? max_reaction_impulse * info.inv_mass : 0.0f;
-
-		// Measured against the body's *current* velocity, so the reaction knows how much of the
-		// error the body is already undoing on its own.
-		const Vector3 linear = rope_reaction_velocity(position_correction, to_godot(jolt_body->GetLinearVelocity()), frame_step, max_recovery);
-		// Rotation deliberately does *not* go through the same treatment. Cancelling the body's
-		// velocity into the correction is right for the linear channel, where the correction is the
-		// rope pulling along its length and the velocity it removes is the body's drift out of reach.
-		// The rotational correction has no such privileged axis: it is whatever torque the rope's
-		// pull about the attachment happens to produce, and cancelling the body's spin about that
-		// axis destroys real rotation rather than a constraint violation.
-		Vector3 angular = rotation_correction / frame_step;
-		if (max_recovery > 0.0f) {
-			const real_t rate = angular.length();
-			if (rate > (real_t)max_recovery) {
-				angular *= (real_t)max_recovery / rate;
-			}
-		}
-
-		if (linear.length_squared() < (real_t)ROPE_EPSILON && angular.length_squared() < (real_t)ROPE_EPSILON) {
-			continue;
-		}
+		const Vector3 linear = linear_impulse * info.inv_mass;
+		const Vector3 angular = info.inv_inertia.xform(angular_impulse);
 
 		body_iface.ActivateBody(info.body_id);
 
@@ -1380,6 +2406,14 @@ void JoltRope3D::step(float p_step) {
 	}
 
 	frame_step = p_step;
+
+	// Snapshot the pose the renderer has been showing before it is overwritten, so this step can be
+	// drawn as the interval it actually is rather than as a jump to its end.
+	render_positions.resize(count);
+	for (uint32_t i = 0; i < count; i++) {
+		render_positions[i] = positions[i];
+	}
+	render_positions_valid = true;
 
 	colliders.clear();
 	collider_lookup.clear();
@@ -1415,6 +2449,7 @@ void JoltRope3D::step(float p_step) {
 	// (`ROPE_SPECULATIVE_MARGIN`), so they are resolved before real penetration, and the distance
 	// correction runs mostly along the rope, which is tangential to a contact plane.
 	for (int s = 0; s < substeps; s++) {
+		_solve_damping(substep);
 		_integrate(substep);
 		_solve_attachments(substep);
 		_solve_bending(substep);
@@ -1434,6 +2469,18 @@ void JoltRope3D::step(float p_step) {
 
 	// Unconditional: attachments to dynamic bodies always transmit force now, and collision
 	// reactions only ever accumulate when `two_way_coupling` is on, so there is nothing to gate.
+	//
+	// Relax and bound the positional half first, then let the velocity pass add its own impulses on
+	// top uncapped -- that half can only ever bring a body to rest against the constraint, never push
+	// it past, so bounding it would stop a heavy load short and let it sink further in instead.
+	// The material frame is built from the final pose, and twist is solved against it -- so both run
+	// after the substep loop, but before the reactions are handed to Jolt, because a locked twist is
+	// one of the things the rope has to push back with.
+	_update_frames();
+
+	_finalize_reactions();
+	_solve_twist(p_step);
+	_solve_velocities();
 	_apply_reactions();
 
 	_update_bounds();

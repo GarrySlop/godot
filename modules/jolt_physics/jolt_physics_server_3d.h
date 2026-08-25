@@ -372,6 +372,9 @@ public:
 
 	virtual void rope_set_points(RID p_rope, const Vector<Vector3> &p_points) override;
 	virtual Vector<Vector3> rope_get_points(RID p_rope) const override;
+	virtual Vector<Vector3> rope_get_point_normals(RID p_rope) const override;
+	virtual Vector<Vector3> rope_get_points_interpolated(RID p_rope, float p_fraction) const override;
+	virtual void rope_reset_interpolation(RID p_rope) override;
 	virtual int rope_get_point_count(RID p_rope) const override;
 
 	virtual Vector3 rope_get_point_position(RID p_rope, int p_point_index) const override;
@@ -405,6 +408,12 @@ public:
 
 	virtual void rope_attach_point_to_body(RID p_rope, int p_point_index, RID p_body, const Vector3 &p_local_offset) override;
 	virtual void rope_detach_point(RID p_rope, int p_point_index) override;
+
+	virtual void rope_set_attachment_flag(RID p_rope, int p_point_index, RopeAttachmentFlag p_flag, bool p_enabled) override;
+	virtual bool rope_get_attachment_flag(RID p_rope, int p_point_index, RopeAttachmentFlag p_flag) const override;
+
+	virtual void rope_set_attachment_param(RID p_rope, int p_point_index, RopeAttachmentParam p_param, float p_value) override;
+	virtual float rope_get_attachment_param(RID p_rope, int p_point_index, RopeAttachmentParam p_param) const override;
 	virtual void rope_remove_all_attachments(RID p_rope) override;
 
 	virtual void rope_apply_point_impulse(RID p_rope, int p_point_index, const Vector3 &p_impulse) override;

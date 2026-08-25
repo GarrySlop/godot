@@ -59,6 +59,7 @@ class RopeBody3D : public MeshInstance3D {
 public:
 	// Compliance at or above this disables bending entirely, matching `JoltRope3D`.
 	static constexpr float ROPE_BEND_DISABLED = 1e6f;
+	static constexpr float ROPE_TWIST_DISABLED = 1e6f;
 
 	enum RenderMode {
 		// No geometry. Drive your own visuals from `get_point_position()`.
@@ -87,6 +88,10 @@ private:
 		float ratio = 0.0f;
 		NodePath node_path;
 		Vector3 offset;
+		bool lock_twist = false;
+		bool lock_direction = false;
+		float direction_compliance = 0.0f;
+		bool solver_limit = false;
 
 		// Resolved once the node is in the tree.
 		ObjectID node_id;
@@ -101,6 +106,10 @@ private:
 		ObjectID node_id;
 		bool is_body = false;
 		Vector3 offset;
+		bool lock_twist = false;
+		bool lock_direction = false;
+		float direction_compliance = 0.0f;
+		bool solver_limit = false;
 	};
 
 	RID rope;
@@ -135,6 +144,8 @@ private:
 
 	float stretch_compliance = 0.0f;
 	float bend_compliance = ROPE_BEND_DISABLED;
+	float twist_compliance = ROPE_TWIST_DISABLED;
+	float twist_damping = 0.5f;
 	float linear_damping = 0.1f;
 	float drag = 1.0f;
 	float gravity_scale = 1.0f;
@@ -155,6 +166,9 @@ private:
 	LocalVector<Pin> pins;
 	LocalVector<RopeAttachment3D *> attachments;
 	LocalVector<ResolvedPin> resolved_pins;
+	// Which particles currently carry an attachment in the solver, so `_apply_pins()` can detach just
+	// what has genuinely gone rather than clearing the lot and rebuilding it.
+	LocalVector<int> applied_pins;
 
 	// Every rope currently in a tree. Ropes are not registered with the physics server as objects,
 	// so there is nothing to enumerate them with; `get_ropes_in_area()` walks this. Kept small by
@@ -211,7 +225,7 @@ private:
 	void _mark_mesh_dirty();
 	void _rebuild_mesh();
 	void _update_mesh();
-	void _update_frames();
+	void _update_frames(const Basis &p_to_local);
 	Ref<ShaderMaterial> _get_ribbon_material();
 
 protected:
@@ -267,6 +281,12 @@ public:
 	void set_bend_compliance(float p_compliance);
 	float get_bend_compliance() const { return bend_compliance; }
 
+	void set_twist_compliance(float p_compliance);
+	float get_twist_compliance() const { return twist_compliance; }
+
+	void set_twist_damping(float p_damping);
+	float get_twist_damping() const { return twist_damping; }
+
 	void set_linear_damping(float p_damping);
 	float get_linear_damping() const { return linear_damping; }
 
@@ -321,6 +341,18 @@ public:
 
 	void set_pin_node(int p_pin, const NodePath &p_path);
 	NodePath get_pin_node(int p_pin) const;
+
+	void set_pin_lock_twist(int p_pin, bool p_enabled);
+	bool get_pin_lock_twist(int p_pin) const;
+
+	void set_pin_lock_direction(int p_pin, bool p_enabled);
+	bool get_pin_lock_direction(int p_pin) const;
+
+	void set_pin_direction_compliance(int p_pin, float p_compliance);
+	float get_pin_direction_compliance(int p_pin) const;
+
+	void set_pin_solver_limit(int p_pin, bool p_enabled);
+	bool get_pin_solver_limit(int p_pin) const;
 
 	void set_pin_offset(int p_pin, const Vector3 &p_offset);
 	Vector3 get_pin_offset(int p_pin) const;

@@ -21,6 +21,18 @@
 		</method>
 	</methods>
 	<members>
+		<member name="direction_compliance" type="float" setter="set_direction_compliance" getter="get_direction_compliance" default="0.0">
+			How softly [member lock_direction] holds, in radians per newton-metre. [code]0.0[/code] is a rigid weld; larger values let the rope bend away from the direction it was fastened in under its own weight.
+			Measured on a 4 m rope fastened horizontally out of a static fixture, at the first segment's angle from the direction it was fastened in: [code]0.0[/code] holds it to 1°, [code]1e-2[/code] lets it fall to 62°, and no lock at all lets it hang straight down at 90°.
+		</member>
+		<member name="lock_direction" type="bool" setter="set_lock_direction" getter="get_lock_direction" default="false">
+			If [code]true[/code], the rope has to leave this attachment along a fixed direction — a cable gland or a splice rather than a hook. The direction is captured from the way the rope already runs when this is switched on.
+			Unlike [member lock_twist] this is a bending constraint, so it works with [member RopeBody3D.twist_compliance] left at its default. Use [member direction_compliance] to choose how rigidly it holds.
+		</member>
+		<member name="lock_twist" type="bool" setter="set_lock_twist" getter="get_lock_twist" default="false">
+			If [code]true[/code], the rope cannot roll about its own axis where it is fastened here — it turns with whatever this attachment is parented to instead of spinning freely on it.
+			The rope is fastened in whatever roll it already has the moment this is switched on, so enabling it never jerks the rope. Requires [member RopeBody3D.twist_compliance] to be below [code]1e6[/code], since that is what gives the rope any torsion to transmit in the first place, and needs to be set at [b]both[/b] ends: with only one end locked, the rope and the body hanging from it just turn together. Lock the hook as well as the load.
+		</member>
 		<member name="ratio" type="float" setter="set_ratio" getter="get_ratio" default="0.0">
 			Where along the rope this attachment holds it, from [code]0.0[/code] at the rope's start to [code]1.0[/code] at its end.
 			Stored as a ratio rather than a particle index, so the attachment stays where you put it when [member RopeBody3D.point_count] changes. Use [method RopeBody3D.get_closest_ratio] to work out the right value for a point in space — that is how you attach to a rope where the player grabbed it.
@@ -28,6 +40,13 @@
 		<member name="rope" type="NodePath" setter="set_rope" getter="get_rope" default="NodePath(&quot;&quot;)">
 			The [RopeBody3D] this attachment connects to. The rope may live anywhere in the scene; it does not need to be related to this node in the tree.
 			The attachment does nothing until this is set.
+		</member>
+		<member name="solver_limit" type="bool" setter="set_solver_limit" getter="get_solver_limit" default="false">
+			If [code]true[/code], this attachment's reach limit is handed to the physics engine as a real constraint, solved together with everything else acting on the attached body — rather than the rope enforcing it itself after the physics step has finished.
+			[b]Turn this on whenever the load reaches the attached body through another joint.[/b] The rope simulates after the physics step, so everything it does to a body is a velocity written after the fact; another constraint on that same body is then re-solved from scratch on the next step and simply overwrites it. A body carrying only its own weight is held either way. A 1 kg body with a 16 kg one hung off it through a spring joint is not: it slides indefinitely without this, and is held to within a centimetre with it. Grabbing a rope with a physics hand is exactly this case.
+			The cost is that the solver's constraint does not anticipate the arc a swinging body travels, so it bleeds energy from a free swing that the rope's own limit does not — measured at 15% over fifteen seconds against 0.75%. So it is off by default: leave it off for a load that simply hangs and swings, turn it on for anything being climbed, winched or pulled against.
+			Requires [member RopeBody3D.inextensible] and a pin or attachment somewhere on the rope that cannot move, since that is what the limit is measured from.
+			An attachment with this set also becomes an anchor in its own right for the rope beyond it, because it is pinned hard and so cannot move. That is what lets two hands hold one rope without being able to pull it apart between them, and what keeps a load hanging below a grabbed point measured against the grab rather than against the distant hook. Put it on [i]every[/i] attachment that carries load, not just the one being pulled: a load left on the rope's own limit is enforced after the physics step and can be left behind by violent motion.
 		</member>
 	</members>
 </class>

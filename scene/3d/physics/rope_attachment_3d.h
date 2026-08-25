@@ -51,6 +51,13 @@ class RopeAttachment3D : public Node3D {
 	NodePath rope_path;
 	float ratio = 0.0f;
 
+	// Orientation locks. An attachment is a ball joint by default -- the rope hangs off it and turns
+	// freely -- and these weld one or both of the rope's own orientations to whatever holds it.
+	bool lock_twist = false;
+	bool lock_direction = false;
+	float direction_compliance = 0.0f;
+	bool solver_limit = false;
+
 	ObjectID rope_id;
 	bool registered = false;
 
@@ -68,6 +75,18 @@ public:
 
 	void set_ratio(float p_ratio);
 	float get_ratio() const { return ratio; }
+
+	void set_lock_twist(bool p_enabled);
+	bool get_lock_twist() const { return lock_twist; }
+
+	void set_lock_direction(bool p_enabled);
+	bool get_lock_direction() const { return lock_direction; }
+
+	void set_direction_compliance(float p_compliance);
+	float get_direction_compliance() const { return direction_compliance; }
+
+	void set_solver_limit(bool p_enabled);
+	bool get_solver_limit() const { return solver_limit; }
 
 	RopeBody3D *get_rope_body() const;
 	// The nearest `PhysicsBody3D` at or above this node, or null if there is none.

@@ -19,7 +19,7 @@
 			<return type="void" />
 			<param index="0" name="impulse" type="Vector3" />
 			<description>
-			Applies [param impulse] to the rope as a whole, divided evenly among its particles, so the rope is pushed without being deformed.
+				Applies [param impulse] to the rope as a whole, divided evenly among its particles, so the rope is pushed without being deformed.
 			</description>
 		</method>
 		<method name="apply_point_impulse">
@@ -27,7 +27,7 @@
 			<param index="0" name="point_index" type="int" />
 			<param index="1" name="impulse" type="Vector3" />
 			<description>
-			Applies [param impulse] to the single particle at [param point_index]. Use this to flick, snag or shoot a rope.
+				Applies [param impulse] to the single particle at [param point_index]. Use this to flick, snag or shoot a rope.
 			</description>
 		</method>
 		<method name="attach_point">
@@ -35,143 +35,168 @@
 			<param index="0" name="point_index" type="int" />
 			<param index="1" name="body" type="Node" />
 			<description>
-			Ties the particle at [param point_index] to [param body], keeping their current relative position. If [param body] is a dynamic [PhysicsBody3D] the two pull on each other; anything else acts as a pin the rope follows.
-			This is the runtime equivalent of a pin in the [member pin_count] array. Use [method get_closest_ratio] to work out where along the rope to attach.
+				Ties the particle at [param point_index] to [param body], keeping their current relative position. If [param body] is a dynamic [PhysicsBody3D] the two pull on each other; anything else acts as a pin the rope follows.
+				This is the runtime equivalent of a pin in the [member pin_count] array. Use [method get_closest_ratio] to work out where along the rope to attach.
 			</description>
 		</method>
 		<method name="detach_point">
 			<return type="void" />
 			<param index="0" name="point_index" type="int" />
 			<description>
-			Releases whatever the particle at [param point_index] was attached or pinned to, letting it swing free.
+				Releases whatever the particle at [param point_index] was attached or pinned to, letting it swing free.
 			</description>
 		</method>
 		<method name="find_pin_at_index" qualifiers="const">
 			<return type="int" />
 			<param index="0" name="point_index" type="int" />
 			<description>
-			Returns the index into the pin array of the pin that lands on the particle [param point_index], or [code]-1[/code] if no pin does.
+				Returns the index into the pin array of the pin that lands on the particle [param point_index], or [code]-1[/code] if no pin does.
 			</description>
 		</method>
 		<method name="get_closest_point" qualifiers="const">
 			<return type="Vector3" />
 			<param index="0" name="world_point" type="Vector3" />
 			<description>
-			Returns the point on the rope nearest to [param world_point], in global coordinates. Unlike [method get_closest_ratio] this is measured along the segments rather than snapped to a particle, so it is the right thing to draw a marker at.
+				Returns the point on the rope nearest to [param world_point], in global coordinates. Unlike [method get_closest_ratio] this is measured along the segments rather than snapped to a particle, so it is the right thing to draw a marker at.
 			</description>
 		</method>
 		<method name="get_closest_ratio" qualifiers="const">
 			<return type="float" />
 			<param index="0" name="world_point" type="Vector3" />
 			<description>
-			Returns where along the rope [param world_point] is nearest, as a ratio from [code]0.0[/code] at the start to [code]1.0[/code] at the end.
-			This is measured the same way pins and [RopeAttachment3D] measure it, so the result can be handed straight to one. This is how you grab a rope: take the hand or raycast position, ask for the ratio, and attach there.
+				Returns where along the rope [param world_point] is nearest, as a ratio from [code]0.0[/code] at the start to [code]1.0[/code] at the end.
+				This is measured the same way pins and [RopeAttachment3D] measure it, so the result can be handed straight to one. This is how you grab a rope: take the hand or raycast position, ask for the ratio, and attach there.
 			</description>
 		</method>
 		<method name="get_collision_layer_value" qualifiers="const">
 			<return type="bool" />
 			<param index="0" name="layer_number" type="int" />
 			<description>
-			Returns whether the layer [param layer_number] is set in [member collision_layer]. [param layer_number] is between 1 and 32.
+				Returns whether the layer [param layer_number] is set in [member collision_layer]. [param layer_number] is between 1 and 32.
 			</description>
 		</method>
 		<method name="get_collision_mask_value" qualifiers="const">
 			<return type="bool" />
 			<param index="0" name="layer_number" type="int" />
 			<description>
-			Returns whether the layer [param layer_number] is set in [member collision_mask]. [param layer_number] is between 1 and 32.
+				Returns whether the layer [param layer_number] is set in [member collision_mask]. [param layer_number] is between 1 and 32.
 			</description>
 		</method>
 		<method name="get_physics_rid" qualifiers="const">
 			<return type="RID" />
 			<description>
-			Returns the [RID] of the underlying rope in [PhysicsServer3D], for direct server calls.
+				Returns the [RID] of the underlying rope in [PhysicsServer3D], for direct server calls.
+			</description>
+		</method>
+		<method name="get_pin_direction_compliance" qualifiers="const">
+			<return type="float" />
+			<param index="0" name="pin_index" type="int" />
+			<description>
+				Returns how softly the pin at [param pin_index] holds its direction.
+			</description>
+		</method>
+		<method name="get_pin_lock_direction" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="pin_index" type="int" />
+			<description>
+				Returns whether the pin at [param pin_index] holds the direction the rope leaves it in.
+			</description>
+		</method>
+		<method name="get_pin_lock_twist" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="pin_index" type="int" />
+			<description>
+				Returns whether the pin at [param pin_index] stops the rope rolling about its own axis there.
 			</description>
 		</method>
 		<method name="get_pin_node" qualifiers="const">
 			<return type="NodePath" />
 			<param index="0" name="pin_index" type="int" />
 			<description>
-			Returns the node the pin at [param pin_index] is tied to, or an empty path if it pins the rope in place.
+				Returns the node the pin at [param pin_index] is tied to, or an empty path if it pins the rope in place.
 			</description>
 		</method>
 		<method name="get_pin_offset" qualifiers="const">
 			<return type="Vector3" />
 			<param index="0" name="pin_index" type="int" />
 			<description>
-			Returns the offset of the pin at [param pin_index] from its node, in that node's local space.
+				Returns the offset of the pin at [param pin_index] from its node, in that node's local space.
 			</description>
 		</method>
 		<method name="get_pin_ratio" qualifiers="const">
 			<return type="float" />
 			<param index="0" name="pin_index" type="int" />
 			<description>
-			Returns where along the rope the pin at [param pin_index] sits, from [code]0.0[/code] at the start to [code]1.0[/code] at the end.
+				Returns where along the rope the pin at [param pin_index] sits, from [code]0.0[/code] at the start to [code]1.0[/code] at the end.
+			</description>
+		</method>
+		<method name="get_pin_solver_limit" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="pin_index" type="int" />
+			<description>
 			</description>
 		</method>
 		<method name="get_point_position" qualifiers="const">
 			<return type="Vector3" />
 			<param index="0" name="point_index" type="int" />
 			<description>
-			Returns the global position of the particle at [param point_index].
+				Returns the global position of the particle at [param point_index].
 			</description>
 		</method>
 		<method name="get_point_velocity" qualifiers="const">
 			<return type="Vector3" />
 			<param index="0" name="point_index" type="int" />
 			<description>
-			Returns the velocity of the particle at [param point_index], in metres per second.
+				Returns the velocity of the particle at [param point_index], in metres per second.
 			</description>
 		</method>
 		<method name="get_points" qualifiers="const">
 			<return type="PackedVector3Array" />
 			<description>
-			Returns the global positions of every particle, in order from start to end. This is the whole rope in one call and is much cheaper than looping over [method get_point_position].
+				Returns the global positions of every particle, in order from start to end. This is the whole rope in one call and is much cheaper than looping over [method get_point_position].
 			</description>
 		</method>
 		<method name="get_ratios_in_area" qualifiers="const">
 			<return type="PackedFloat32Array" />
 			<param index="0" name="area" type="Area3D" />
 			<description>
-			Returns where this rope is inside [param area], as one ratio per particle that tests inside, ordered from start to end. Empty when the rope is clear of the area.
-			Use this to tell [i]which part[/i] of a rope is affected — the submerged part, the part in the fire, the part inside a trigger volume. See [method is_in_area] when only a yes or no is needed.
-			[b]Note:[/b] Particles are point-tested, so an area thinner than the spacing between particles can be missed. Raise [member point_count] if that matters.
+				Returns where this rope is inside [param area], as ratios along the rope from [code]0.0[/code] at the start to [code]1.0[/code] at the end. Empty when the rope is clear of the area.
+				The rope is tested as the capsules it actually collides with, not as bare points, so the ratios returned are the ends of each segment that overlaps. A rope merely [i]crossing[/i] a thin area therefore reports the crossing rather than reporting nothing.
 			</description>
 		</method>
 		<method name="get_ropes_in_area" qualifiers="static">
 			<return type="RopeBody3D[]" />
 			<param index="0" name="area" type="Area3D" />
 			<description>
-			Returns every [RopeBody3D] in the same world with at least one particle inside [param area].
-			Ropes are not physics-server objects and so are invisible to area monitoring — [method Area3D.get_overlapping_bodies] will never list one. This asks the question from the rope's side instead and needs no changes to the area at all.
-			[b]Note:[/b] This is a query, not a monitor: it answers for the moment you call it and emits no signals. It costs a point query per particle per rope, so it suits being called on demand or on a timer rather than every frame for every rope in a level.
+				Returns every [RopeBody3D] in the same world with any part inside [param area], tested segment by segment as in [method is_in_area].
+				Ropes are invisible to the physics broadphase, so they cannot report themselves through an [Area3D]'s own signals. This is a pull query: call it when you want to know, rather than expecting to be told.
 			</description>
 		</method>
 		<method name="get_segment_length" qualifiers="const">
 			<return type="float" />
 			<description>
-			Returns the rest length of a single segment, which is [member length] divided by one less than [member point_count].
+				Returns the rest length of a single segment, which is [member length] divided by one less than [member point_count].
 			</description>
 		</method>
 		<method name="get_simulated_length" qualifiers="const">
 			<return type="float" />
 			<description>
-			Returns the rope's actual current length, summed along its segments. Compare against [member length] to see how much the rope is being stretched; with [member inextensible] on the two should stay equal.
+				Returns the rope's actual current length, summed along its segments. Compare against [member length] to see how much the rope is being stretched; with [member inextensible] on the two should stay equal.
 			</description>
 		</method>
 		<method name="is_in_area" qualifiers="const">
 			<return type="bool" />
 			<param index="0" name="area" type="Area3D" />
 			<description>
-			Returns [code]true[/code] if any part of this rope is inside [param area]. Stops at the first particle that is, so it is cheaper than [method get_ratios_in_area] when the detail is not needed.
-			See [method get_ropes_in_area] for why an [Area3D] cannot answer this itself.
+				Returns [code]true[/code] if any part of this rope is inside [param area].
+				Accurate to the rope's actual volume rather than to its resolution: the rope is tested segment by segment, as the capsules it collides with, so a rope lying across a trigger far thinner than the gap between its particles is still detected. Stops at the first overlapping segment, so it is cheaper than [method get_ratios_in_area] when the detail is not needed.
 			</description>
 		</method>
 		<method name="is_point_pinned" qualifiers="const">
 			<return type="bool" />
 			<param index="0" name="point_index" type="int" />
 			<description>
-			Returns [code]true[/code] if the particle at [param point_index] is held by a pin or an attachment.
+				Returns [code]true[/code] if the particle at [param point_index] is held by a pin or an attachment.
 			</description>
 		</method>
 		<method name="pin_point">
@@ -179,21 +204,21 @@
 			<param index="0" name="point_index" type="int" />
 			<param index="1" name="pin" type="bool" />
 			<description>
-			Pins the particle at [param point_index] in place at its current position, or releases it if [param pin] is [code]false[/code]. A pinned particle is immovable and is what the rest of the rope hangs from.
+				Pins the particle at [param point_index] in place at its current position, or releases it if [param pin] is [code]false[/code]. A pinned particle is immovable and is what the rest of the rope hangs from.
 			</description>
 		</method>
 		<method name="reset">
 			<return type="void" />
 			<description>
-			Returns the rope to its spawn pose and clears all motion. Because the simulation runs in world space, this is also how you move a rope that is already simulating: move the node, then call this.
+				Returns the rope to its spawn pose and clears all motion. Because the simulation runs in world space, this is also how you move a rope that is already simulating: move the node, then call this.
 			</description>
 		</method>
 		<method name="sample_ratio" qualifiers="const">
 			<return type="Vector3" />
 			<param index="0" name="ratio" type="float" />
 			<description>
-			Returns the global position at [param ratio] along the rope, from [code]0.0[/code] at the start to [code]1.0[/code] at the end, interpolated between particles.
-			Pairs with [method get_closest_ratio]: ask where something is on the rope, then track that spot as the rope moves.
+				Returns the global position at [param ratio] along the rope, from [code]0.0[/code] at the start to [code]1.0[/code] at the end, interpolated between particles.
+				Pairs with [method get_closest_ratio]: ask where something is on the rope, then track that spot as the rope moves.
 			</description>
 		</method>
 		<method name="set_collision_layer_value">
@@ -201,7 +226,7 @@
 			<param index="0" name="layer_number" type="int" />
 			<param index="1" name="value" type="bool" />
 			<description>
-			Sets whether the layer [param layer_number] is set in [member collision_layer]. [param layer_number] is between 1 and 32.
+				Sets whether the layer [param layer_number] is set in [member collision_layer]. [param layer_number] is between 1 and 32.
 			</description>
 		</method>
 		<method name="set_collision_mask_value">
@@ -209,7 +234,31 @@
 			<param index="0" name="layer_number" type="int" />
 			<param index="1" name="value" type="bool" />
 			<description>
-			Sets whether the layer [param layer_number] is set in [member collision_mask]. [param layer_number] is between 1 and 32.
+				Sets whether the layer [param layer_number] is set in [member collision_mask]. [param layer_number] is between 1 and 32.
+			</description>
+		</method>
+		<method name="set_pin_direction_compliance">
+			<return type="void" />
+			<param index="0" name="pin_index" type="int" />
+			<param index="1" name="compliance" type="float" />
+			<description>
+				Sets how softly the pin at [param pin_index] holds its direction, in radians per newton-metre. [code]0.0[/code] is a rigid weld.
+			</description>
+		</method>
+		<method name="set_pin_lock_direction">
+			<return type="void" />
+			<param index="0" name="pin_index" type="int" />
+			<param index="1" name="enabled" type="bool" />
+			<description>
+				Sets whether the pin at [param pin_index] holds the direction the rope leaves it in. See [member RopeAttachment3D.lock_direction].
+			</description>
+		</method>
+		<method name="set_pin_lock_twist">
+			<return type="void" />
+			<param index="0" name="pin_index" type="int" />
+			<param index="1" name="enabled" type="bool" />
+			<description>
+				Sets whether the pin at [param pin_index] stops the rope rolling about its own axis there. See [member RopeAttachment3D.lock_twist].
 			</description>
 		</method>
 		<method name="set_pin_node">
@@ -217,7 +266,7 @@
 			<param index="0" name="pin_index" type="int" />
 			<param index="1" name="path" type="NodePath" />
 			<description>
-			Ties the pin at [param pin_index] to the node at [param path]. A [PhysicsBody3D] becomes a real attachment; any other [Node3D] is a pin the rope follows; an empty path pins the rope in place.
+				Ties the pin at [param pin_index] to the node at [param path]. A [PhysicsBody3D] becomes a real attachment; any other [Node3D] is a pin the rope follows; an empty path pins the rope in place.
 			</description>
 		</method>
 		<method name="set_pin_offset">
@@ -225,7 +274,7 @@
 			<param index="0" name="pin_index" type="int" />
 			<param index="1" name="offset" type="Vector3" />
 			<description>
-			Sets the offset of the pin at [param pin_index] from its node, in that node's local space. This is where on the body the rope is actually knotted.
+				Sets the offset of the pin at [param pin_index] from its node, in that node's local space. This is where on the body the rope is actually knotted.
 			</description>
 		</method>
 		<method name="set_pin_position">
@@ -233,7 +282,7 @@
 			<param index="0" name="point_index" type="int" />
 			<param index="1" name="position" type="Vector3" />
 			<description>
-			Moves the pin holding the particle at [param point_index] to [param position], in global coordinates. Only meaningful for a particle pinned in place; use this to drag a rope end around from a script.
+				Moves the pin holding the particle at [param point_index] to [param position], in global coordinates. Only meaningful for a particle pinned in place; use this to drag a rope end around from a script.
 			</description>
 		</method>
 		<method name="set_pin_ratio">
@@ -241,90 +290,107 @@
 			<param index="0" name="pin_index" type="int" />
 			<param index="1" name="ratio" type="float" />
 			<description>
-			Sets where along the rope the pin at [param pin_index] sits, from [code]0.0[/code] at the start to [code]1.0[/code] at the end.
+				Sets where along the rope the pin at [param pin_index] sits, from [code]0.0[/code] at the start to [code]1.0[/code] at the end.
+			</description>
+		</method>
+		<method name="set_pin_solver_limit">
+			<return type="void" />
+			<param index="0" name="pin_index" type="int" />
+			<param index="1" name="enabled" type="bool" />
+			<description>
 			</description>
 		</method>
 		<method name="toggle_pin_at_ratio">
 			<return type="int" />
 			<param index="0" name="ratio" type="float" />
 			<description>
-			Adds a pin at [param ratio] if there is not one there already, or removes the one that is. Returns the resulting pin count.
-			This is what clicking a rope particle in the viewport does.
+				Adds a pin at [param ratio] if there is not one there already, or removes the one that is. Returns the resulting pin count.
+				This is what clicking a rope particle in the viewport does.
 			</description>
 		</method>
 	</methods>
 	<members>
 		<member name="attach_end" type="NodePath" setter="set_attach_end" getter="get_attach_end" default="NodePath(&quot;&quot;)">
-		The node the far end of the rope (ratio [code]1.0[/code]) is tied to.
-		A [PhysicsBody3D] here becomes a real attachment: the rope hangs from the body, and if the body is dynamic the two pull on each other. Any other [Node3D] acts as a pin the rope simply follows.
-		This is exactly a pin at ratio [code]1.0[/code], and it is also one of the two points [constant LENGTH_FROM_ENDPOINTS] measures between.
+			The node the far end of the rope (ratio [code]1.0[/code]) is tied to.
+			A [PhysicsBody3D] here becomes a real attachment: the rope hangs from the body, and if the body is dynamic the two pull on each other. Any other [Node3D] acts as a pin the rope simply follows.
+			This is exactly a pin at ratio [code]1.0[/code], and it is also one of the two points [constant LENGTH_FROM_ENDPOINTS] measures between.
 		</member>
 		<member name="attach_start" type="NodePath" setter="set_attach_start" getter="get_attach_start" default="NodePath(&quot;&quot;)">
-		The node the near end of the rope (ratio [code]0.0[/code]) is tied to. See [member attach_end], which behaves identically at the other end.
+			The node the near end of the rope (ratio [code]0.0[/code]) is tied to. See [member attach_end], which behaves identically at the other end.
 		</member>
 		<member name="auto_sag" type="bool" setter="set_auto_sag" getter="is_auto_sag" default="true">
-		If [code]true[/code], a rope whose [member length] exceeds the straight distance between its outermost pins spawns already bowed downward by the excess, instead of spawning taut and visibly dropping on the first frame.
-		This only shapes the starting pose. It has no effect once the rope is simulating.
+			If [code]true[/code], a rope whose [member length] exceeds the straight distance between its outermost pins spawns already bowed downward by the excess, instead of spawning taut and visibly dropping on the first frame.
+			This only shapes the starting pose. It has no effect once the rope is simulating.
 		</member>
 		<member name="bend_compliance" type="float" setter="set_bend_compliance" getter="get_bend_compliance" default="1000000.0">
-		How readily the rope curves. This is an inverse stiffness in metres per newton: [code]0.0[/code] is as stiff as the solver can make it, and larger values are floppier. At or above [code]1e6[/code] — the default — bending is switched off entirely and the rope is perfectly limp.
-		Guide values, measured on a 2 m rope of 21 points at the default [member total_mass] and [member simulation_substeps]:
-		- [code]1e6[/code] (default) — string, chain, cord. No resistance to curving whatsoever.
-		- [code]1e-2[/code] — rubber tubing. Just barely holds a shape.
-		- [code]1e-3[/code] — garden hose, thick electrical cable.
-		- [code]1e-4[/code] — heavy-gauge cable.
-		- [code]1e-5[/code] to [code]0.0[/code] — thick copper wire. Settles into the widest arc the rope's length allows and refuses to fold tightly.
-		[b]Note:[/b] This resists [i]curvature[/i], not orientation. A straight rope hanging from a single pin has no curvature anywhere along it, so no amount of stiffness will hold it out horizontally the way a wire clamped in a vise would. What the setting governs is how tightly the rope is willing to fold.
-		[b]Note:[/b] The effective stiffness also rises with [member simulation_substeps] and falls as [member total_mass] rises, so a large change to either is worth re-tuning this against.
+			How readily the rope curves. This is an inverse stiffness in metres per newton: [code]0.0[/code] is as stiff as the solver can make it, and larger values are floppier. At or above [code]1e6[/code] — the default — bending is switched off entirely and the rope is perfectly limp.
+			Guide values, measured on a 2 m rope of 21 points at the default [member total_mass] and [member simulation_substeps]:
+			- [code]1e6[/code] (default) — string, chain, cord. No resistance to curving whatsoever.
+			- [code]1e-2[/code] — rubber tubing. Just barely holds a shape.
+			- [code]1e-3[/code] — garden hose, thick electrical cable.
+			- [code]1e-4[/code] — heavy-gauge cable.
+			- [code]1e-5[/code] to [code]0.0[/code] — thick copper wire. Settles into the widest arc the rope's length allows and refuses to fold tightly.
+			[b]Note:[/b] This resists [i]curvature[/i], not orientation. A straight rope hanging from a single pin has no curvature anywhere along it, so no amount of stiffness will hold it out horizontally the way a wire clamped in a vise would. What the setting governs is how tightly the rope is willing to fold.
+			[b]Note:[/b] The effective stiffness also rises with [member simulation_substeps] and falls as [member total_mass] rises, so a large change to either is worth re-tuning this against.
 		</member>
 		<member name="collision_enabled" type="bool" setter="set_collision_enabled" getter="is_collision_enabled" default="true">
-		If [code]true[/code], the rope collides with the world. Each segment is tested as a capsule, so the rope collides along its whole length rather than only at its particles.
-		Turning this off is by far the cheapest way to make a rope faster, and is usually the right choice for purely decorative ones.
+			If [code]true[/code], the rope collides with the world. Each segment is tested as a capsule, so the rope collides along its whole length rather than only at its particles.
+			Turning this off is by far the cheapest way to make a rope faster, and is usually the right choice for purely decorative ones.
 		</member>
 		<member name="collision_layer" type="int" setter="set_collision_layer" getter="get_collision_layer" default="1">
-		The physics layers this rope is on. Ropes are not queryable physics objects, so this exists for symmetry and for other ropes rather than for general queries.
+			The physics layers this rope is on. Ropes are not queryable physics objects, so this exists for symmetry and for other ropes rather than for general queries.
 		</member>
 		<member name="collision_mask" type="int" setter="set_collision_mask" getter="get_collision_mask" default="1">
-		The physics layers this rope scans for collisions. A collider is only considered if its own layer is in this mask.
+			The physics layers this rope scans for collisions. A collider is only considered if its own layer is in this mask.
 		</member>
 		<member name="drag" type="float" setter="set_drag" getter="get_drag" default="1.0">
-		Quadratic air drag. The rope is slowed in proportion to the [i]square[/i] of its speed, so this damps whipping and fast swinging far more than it damps slow settling — which is what makes a rope look like it is moving through air rather than through treacle.
-		Set to [code]0.0[/code] to disable. See also [member linear_damping], which damps all motion equally.
+			Air drag. The rope is slowed in proportion to the [i]square[/i] of its speed, so this resists whipping and fast swinging far more than it resists slow settling — which is what makes a rope look like it is moving through air rather than through treacle.
+			Drag is applied separately across the rope and along it, because a cable's air resistance is dominated by the component across its axis: sliding along its own length costs it about two percent as much. That is what makes a slack rope flick sideways and settle, rather than gliding through the air like a bead on a wire.
+			Set to [code]0.0[/code] to disable. See also [member linear_damping], which resists the rope [i]flexing[/i] rather than moving.
 		</member>
 		<member name="friction" type="float" setter="set_friction" getter="get_friction" default="0.5">
-		Friction between the rope and whatever it touches, combined multiplicatively with the collider's own friction. [code]0.0[/code] slides freely; [code]1.0[/code] grips.
-		This is what keeps a rope draped over a beam from sliding off it, and what carries a rope along on a moving platform.
+			Friction between the rope and whatever it touches, combined multiplicatively with the collider's own friction. [code]0.0[/code] slides freely; [code]1.0[/code] grips.
+			This is what keeps a rope draped over a beam from sliding off it, and what carries a rope along on a moving platform.
 		</member>
 		<member name="gravity_scale" type="float" setter="set_gravity_scale" getter="get_gravity_scale" default="1.0">
-		Multiplier on the gravity the rope experiences. [code]0.0[/code] makes it weightless and negative values make it fall upward.
-		Gravity is sampled per particle from the [Area3D]s the rope is in, so point gravity and custom gravity areas work as they do for rigid bodies.
+			Multiplier on the gravity the rope experiences. [code]0.0[/code] makes it weightless and negative values make it fall upward.
+			Gravity is sampled per particle from the [Area3D]s the rope is in, so point gravity and custom gravity areas work as they do for rigid bodies.
 		</member>
 		<member name="inextensible" type="bool" setter="set_inextensible" getter="is_inextensible" default="true">
-		If [code]true[/code], a hard limit is enforced on how long each segment may be, so the rope's total length can never exceed [member length] no matter what is pulling on it.
-		This is what actually makes a rope behave like a rope rather than an elastic, and it should normally be left on. With it on, [member stretch_compliance] can only make the rope softer [i]within[/i] its length — it can never make the rope longer.
+			If [code]true[/code], a hard limit is enforced on how long each segment may be, so the rope's total length can never exceed [member length] no matter what is pulling on it.
+			This is what actually makes a rope behave like a rope rather than an elastic, and it should normally be left on. With it on, [member stretch_compliance] can only make the rope softer [i]within[/i] its length — it can never make the rope longer.
 		</member>
 		<member name="initial_direction" type="Vector3" setter="set_initial_direction" getter="get_initial_direction" default="Vector3(0, -1, 0)">
-		The direction the rope is laid out in when it spawns, used when [member spawn_curve] has not been shaped and the rope does not have two pins to span between.
+			The direction the rope is laid out in when it spawns, used when [member spawn_curve] has not been shaped and the rope does not have two pins to span between.
 		</member>
 		<member name="length" type="float" setter="set_length" getter="get_length" default="4.0">
-		The rope's total length along its own curve, in metres.
-		This is a genuine input, not a result: it is independent of [member point_count], so changing the resolution makes the rope smoother or coarser without making it longer or shorter. Ignored unless [member length_mode] is [constant LENGTH_MANUAL], where it is used directly; the other modes compute it and write it here.
+			The rope's total length along its own curve, in metres.
+			This is a genuine input, not a result: it is independent of [member point_count], so changing the resolution makes the rope smoother or coarser without making it longer or shorter. Ignored unless [member length_mode] is [constant LENGTH_MANUAL], where it is used directly; the other modes compute it and write it here.
 		</member>
 		<member name="length_mode" type="int" setter="set_length_mode" getter="get_length_mode" enum="RopeBody3D.LengthMode" default="0">
-		Where the rope's [member length] comes from. See [enum LengthMode].
+			Where the rope's [member length] comes from. See [enum LengthMode].
 		</member>
 		<member name="linear_damping" type="float" setter="set_linear_damping" getter="get_linear_damping" default="0.1">
-		Velocity damping applied to every particle, per second, independent of how fast the rope is moving.
-		Use this to settle a rope down generally. For motion that should look like it is being resisted by air — whipping, fast swings — [member drag] is the more natural control, because it acts much more strongly on fast motion than on slow.
+			How strongly the rope resists [i]deforming[/i], per second. This damps flexing, wobble and internal ringing, and deliberately leaves the rope's overall motion alone: a rope swinging as a straight line is not deforming, so raising this will not bleed the swing away. A settled rope still comes to rest.
+			Use this to stop a rope jittering or ringing. For resistance to motion through the air — whipping, fast swings — [member drag] is the control, because it acts on speed rather than on flexing.
 		</member>
 		<member name="max_reaction_impulse" type="float" setter="set_max_reaction_impulse" getter="get_max_reaction_impulse" default="100.0">
-		A ceiling on how hard the rope may [i]push[/i] an attached or contacted rigid body back into a position the rope allows, expressed as an impulse so it becomes a smaller speed change on a heavier body.
-		This deliberately does [i]not[/i] limit the rope's ability to [i]stop[/i] a body. Stopping a body only removes energy and is what makes a rope come taut and hold; it is the push afterwards that can misbehave. Raise this if a heavy load takes too long to settle after a hard catch, lower it if light objects resting against a rope get nudged around too eagerly, and set it to [code]0.0[/code] to remove the limit entirely.
-		Only relevant when [member two_way_coupling] is enabled or the rope is attached to a dynamic body.
+			A ceiling on how hard the rope may [i]push[/i] an attached or contacted rigid body back into a position the rope allows, expressed as an impulse so it becomes a smaller speed change on a heavier body.
+			This deliberately does [i]not[/i] limit the rope's ability to [i]stop[/i] a body. Stopping a body only removes energy and is what makes a rope come taut and hold; it is the push afterwards that can misbehave. Raise this if a heavy load takes too long to settle after a hard catch, lower it if light objects resting against a rope get nudged around too eagerly, and set it to [code]0.0[/code] to remove the limit entirely.
+			Only relevant when [member two_way_coupling] is enabled or the rope is attached to a dynamic body.
 		</member>
 		<member name="pin_count" type="int" setter="set_pin_count" getter="get_pin_count" default="0">
-		The number of entries in the rope's pin array. Each pin holds one point of the rope, identified by a ratio from [code]0.0[/code] at the start to [code]1.0[/code] at the end, either in place or to a node.
-		Pins are stored as ratios rather than particle indices, so they stay where you put them when [member point_count] changes. You can also add and remove them by clicking the rope's particles in the viewport.
+			The number of entries in the rope's pin array. Each pin holds one point of the rope, identified by a ratio from [code]0.0[/code] at the start to [code]1.0[/code] at the end, either in place or to a node.
+			Pins are stored as ratios rather than particle indices, so they stay where you put them when [member point_count] changes. You can also add and remove them by clicking the rope's particles in the viewport.
+		</member>
+		<member name="pins/{index}/direction_compliance" type="float" setter="" getter="" default="0.0">
+			How softly [member pins/{index}/lock_direction] holds, in radians per newton-metre. [code]0.0[/code] is a rigid weld.
+		</member>
+		<member name="pins/{index}/lock_direction" type="bool" setter="" getter="" default="false">
+			If [code]true[/code], the rope has to leave this pin along a fixed direction, captured from the way it already runs. See [member RopeAttachment3D.lock_direction].
+		</member>
+		<member name="pins/{index}/lock_twist" type="bool" setter="" getter="" default="false">
+			If [code]true[/code], the rope cannot roll about its own axis where this pin holds it. See [member RopeAttachment3D.lock_twist], which is the same option on an attachment node.
 		</member>
 		<member name="pins/{index}/node" type="NodePath" setter="" getter="" default="NodePath(&quot;&quot;)">
 			The node this pin ties the rope to. A [PhysicsBody3D] becomes a real attachment that carries force; any other [Node3D] is a moving pin the rope follows. Leave empty to pin the rope in place at its spawn position.
@@ -335,71 +401,94 @@
 		<member name="pins/{index}/ratio" type="float" setter="" getter="" default="0.0">
 			Where along the rope this pin holds it, from [code]0.0[/code] at the start to [code]1.0[/code] at the end. Stored as a ratio so the pin stays put when [member point_count] changes.
 		</member>
+		<member name="pins/{index}/solver_limit" type="bool" setter="" getter="" default="false">
+			If [code]true[/code], this pin's reach limit is solved by the physics engine rather than by the rope. See [member RopeAttachment3D.solver_limit], which is the same option on an attachment node.
+		</member>
 		<member name="point_count" type="int" setter="set_point_count" getter="get_point_count" default="16">
-		How many particles the rope is resolved with. This is a quality and cost setting only — it does not change [member length].
-		More points means a smoother curve, tighter collision against small geometry, and finer control over where pins can sit, at a roughly linear cost.
+			How many particles the rope is resolved with. This is a quality and cost setting only — it does not change [member length].
+			More points means a smoother curve, tighter collision against small geometry, and finer control over where pins can sit, at a roughly linear cost.
 		</member>
 		<member name="radial_segments" type="int" setter="set_radial_segments" getter="get_radial_segments" default="6">
-		How many sides the generated tube has. Only used when [member render_mode] is [constant RENDER_TUBE].
+			How many sides the generated tube has. Only used when [member render_mode] is [constant RENDER_TUBE].
 		</member>
 		<member name="radius" type="float" setter="set_radius" getter="get_radius" default="0.05">
-		The rope's physical radius in metres. Used both for collision — each segment is a capsule of this radius — and for the thickness of the generated mesh, so the rope collides at the size it looks.
+			The rope's physical radius in metres. Used both for collision — each segment is a capsule of this radius — and for the thickness of the generated mesh, so the rope collides at the size it looks.
 		</member>
 		<member name="render_mode" type="int" setter="set_render_mode" getter="get_render_mode" enum="RopeBody3D.RenderMode" default="1">
-		How the rope generates its mesh, or whether it generates one at all. See [enum RenderMode].
+			How the rope generates its mesh, or whether it generates one at all. See [enum RenderMode].
 		</member>
 		<member name="restitution" type="float" setter="set_restitution" getter="get_restitution" default="0.0">
-		How much the rope bounces off what it hits, combined multiplicatively with the collider's own restitution. Real rope barely bounces at all, which is why this defaults to [code]0.0[/code].
+			How much the rope bounces off what it hits, combined multiplicatively with the collider's own restitution. Real rope barely bounces at all, which is why this defaults to [code]0.0[/code].
 		</member>
 		<member name="simulation_substeps" type="int" setter="set_simulation_substeps" getter="get_simulation_substeps" default="4">
-		How many solver substeps the rope takes per physics frame.
-		Following the small-steps approach, the rope takes many substeps with one constraint iteration each rather than one step with many iterations, which converges far better for the same cost. More substeps means a stiffer, more accurate and more expensive rope.
-		[b]Note:[/b] Effective stiffness scales with this, so changing it changes how [member stretch_compliance] and [member bend_compliance] behave.
+			How many solver substeps the rope takes per physics frame.
+			Following the small-steps approach, the rope takes many substeps with one constraint iteration each rather than one step with many iterations, which converges far better for the same cost. More substeps means a stiffer, more accurate and more expensive rope.
+			[b]Note:[/b] Effective stiffness scales with this, so changing it changes how [member stretch_compliance] and [member bend_compliance] behave.
 		</member>
 		<member name="slack" type="float" setter="set_slack" getter="get_slack" default="0.0">
-		Extra length given to the rope beyond the straight-line distance between its two attachment points, in metres. [code]0.0[/code] gives a rope pulled exactly taut, and larger values let it hang.
-		Only used when [member length_mode] is [constant LENGTH_FROM_ENDPOINTS].
+			Extra length given to the rope beyond the straight-line distance between its two attachment points, in metres. [code]0.0[/code] gives a rope pulled exactly taut, and larger values let it hang.
+			Only used when [member length_mode] is [constant LENGTH_FROM_ENDPOINTS].
 		</member>
 		<member name="spawn_curve" type="Curve3D" setter="set_spawn_curve" getter="get_spawn_curve">
-		The shape the rope is in at the moment it spawns, in the node's local space. Drag the handles in the viewport to bend it.
-		[b]Note:[/b] This is a starting pose, [i]not[/i] a rest shape. The rope does not spring back toward this curve and has no memory of it once the simulation starts — it exists so a rope can begin already bent, instead of spawning as a straight line through whatever happens to be in the way. To make a rope that resists being bent, use [member bend_compliance].
+			The shape the rope is in at the moment it spawns, in the node's local space. Drag the handles in the viewport to bend it.
+			[b]Note:[/b] This is a starting pose, [i]not[/i] a rest shape. The rope does not spring back toward this curve and has no memory of it once the simulation starts — it exists so a rope can begin already bent, instead of spawning as a straight line through whatever happens to be in the way. To make a rope that resists being bent, use [member bend_compliance].
 		</member>
 		<member name="stretch_compliance" type="float" setter="set_stretch_compliance" getter="get_stretch_compliance" default="0.0">
-		Inverse stiffness of the rope's length constraint, in metres per newton. [code]0.0[/code] is as rigid as the solver allows and larger values are stretchier.
-		With [member inextensible] left on — the default — this only softens how the rope behaves within its length; it can never let the rope get longer. Turn [member inextensible] off to get a genuinely elastic rope. Measured that way, a 4 m rope at default mass carrying a 10 kg load settles at roughly:
-		- [code]0.0[/code] to [code]1e-5[/code] — about 21% long. This floor is the solver's own softness at a 10:1 mass ratio rather than the compliance, so values in this range are all much the same.
-		- [code]1e-4[/code] — about 27% long. A stiff synthetic rope with a little give.
-		- [code]1e-3[/code] — about 89% long. Clearly elastic.
-		- [code]1e-2[/code] — several times its own length. A bungee.
-		For a rope that should not stretch, leave [member inextensible] on and ignore this setting.
+			Inverse stiffness of the rope's length constraint, in metres per newton. [code]0.0[/code] is as rigid as the solver allows and larger values are stretchier.
+			With [member inextensible] left on — the default — this only softens how the rope behaves within its length; it can never let the rope get longer. Turn [member inextensible] off to get a genuinely elastic rope. Measured that way, a 4 m rope at default mass carrying a 10 kg load settles at roughly:
+			- [code]0.0[/code] to [code]1e-5[/code] — about 21% long. This floor is the solver's own softness at a 10:1 mass ratio rather than the compliance, so values in this range are all much the same.
+			- [code]1e-4[/code] — about 27% long. A stiff synthetic rope with a little give.
+			- [code]1e-3[/code] — about 89% long. Clearly elastic.
+			- [code]1e-2[/code] — several times its own length. A bungee.
+			For a rope that should not stretch, leave [member inextensible] on and ignore this setting.
 		</member>
 		<member name="total_mass" type="float" setter="set_total_mass" getter="get_total_mass" default="1.0">
-		The mass of the whole rope in kilograms, divided evenly among its particles.
-		What matters is mostly the ratio between this and the mass of anything the rope is tied to or pushing against: a rope far lighter than its load will be dragged around by it, and a rope far heavier will barely notice.
+			The mass of the whole rope in kilograms, divided evenly among its particles.
+			What matters is mostly the ratio between this and the mass of anything the rope is tied to or pushing against: a rope far lighter than its load will be dragged around by it, and a rope far heavier will barely notice.
+		</member>
+		<member name="twist_compliance" type="float" setter="set_twist_compliance" getter="get_twist_compliance" default="1000000.0">
+			How readily the rope winds about its own axis, in radians per newton-metre. Low values are a stiff cable, high values a rope that offers no torsional resistance at all.
+			This only does anything between two points whose rotation is constrained — see [member RopeAttachment3D.lock_twist]. With one end free the rope simply turns as a whole, which is correct: nothing is resisting it.
+			Measured on a 4 m rope with a 30 kg box locked at each end, spun about the rope's axis at 6 rad/s, at how far round the box gets before the rope hauls it back:
+			[codeblock lang=text]
+			1e6 (default)  free spinning; the solve is skipped entirely and costs nothing
+			1.0            4.5 turns   barely resists
+			1e-2           168°        laid rope or cord
+			1e-3            53°        firm rope
+			1e-4            24°        wire rope
+			1e-5             9°        thick copper wire
+			0.0             11°        rigid
+			[/codeblock]
+			The twist chain is solved directly rather than iteratively, so any value here is stable — including [code]0.0[/code] — at any timestep and any [member simulation_substeps].
+			[b]Note:[/b] The rope stores and transmits torsion, but it will not buckle into a coil the way a real over-twisted cable does. Twist and bending are solved independently.
+		</member>
+		<member name="twist_damping" type="float" setter="set_twist_damping" getter="get_twist_damping" default="0.5">
+			Damping applied to the rope's twist alone, so torsional ringing settles without affecting how the rope moves through space. Raise it if a stiff [member twist_compliance] leaves a locked load buzzing; drop it to [code]0.0[/code] for a rope that keeps unwinding and rewinding for a long time.
+			Has no effect unless [member twist_compliance] is below [code]1e6[/code].
 		</member>
 		<member name="two_way_coupling" type="bool" setter="set_two_way_coupling" getter="is_two_way_coupling" default="false">
-		If [code]true[/code], dynamic rigid bodies the rope touches are pushed back by it, so a rope can drag a crate along or hold one up. If [code]false[/code], the rope reacts to bodies but never pushes them, which is cheaper and cannot destabilise anything.
-		[b]Note:[/b] A rope [i]attached[/i] to a dynamic body always transmits force to it regardless of this setting; this governs [i]contacts[/i]. Hard-pinning a rope end to a dynamic body would let the body drag that end wherever it went and force the rope to stretch without limit.
+			If [code]true[/code], dynamic rigid bodies the rope touches are pushed back by it, so a rope can drag a crate along or hold one up. If [code]false[/code], the rope reacts to bodies but never pushes them, which is cheaper and cannot destabilise anything.
+			[b]Note:[/b] A rope [i]attached[/i] to a dynamic body always transmits force to it regardless of this setting; this governs [i]contacts[/i]. Hard-pinning a rope end to a dynamic body would let the body drag that end wherever it went and force the rope to stretch without limit.
 		</member>
 	</members>
 	<constants>
 		<constant name="RENDER_NONE" value="0" enum="RenderMode">
-		No mesh is generated. Use this when the rope is invisible, or when you draw it yourself from [method get_points].
+			No mesh is generated. Use this when the rope is invisible, or when you draw it yourself from [method get_points].
 		</constant>
 		<constant name="RENDER_TUBE" value="1" enum="RenderMode">
-		The rope is drawn as a closed tube with [member radial_segments] sides. The better-looking option, and the right one for thick ropes seen close up.
+			The rope is drawn as a closed tube with [member radial_segments] sides. The better-looking option, and the right one for thick ropes seen close up.
 		</constant>
 		<constant name="RENDER_RIBBON" value="2" enum="RenderMode">
-		The rope is drawn as a two-vertex-wide strip that turns to face the camera. Far cheaper than a tube and effectively indistinguishable for thin ropes, cables and wires.
+			The rope is drawn as a two-vertex-wide strip that turns to face the camera. Far cheaper than a tube and effectively indistinguishable for thin ropes, cables and wires.
 		</constant>
 		<constant name="LENGTH_MANUAL" value="0" enum="LengthMode">
-		[member length] is used exactly as set.
+			[member length] is used exactly as set.
 		</constant>
 		<constant name="LENGTH_FROM_ENDPOINTS" value="1" enum="LengthMode">
-		[member length] is the straight-line distance between the two attachment points plus [member slack], recomputed as they move apart. This is the mode to use for a rope strung between two things.
+			[member length] is the straight-line distance between the two attachment points plus [member slack], recomputed as they move apart. This is the mode to use for a rope strung between two things.
 		</constant>
 		<constant name="LENGTH_FROM_CURVE" value="2" enum="LengthMode">
-		[member length] is the arc length of [member spawn_curve], so the rope is exactly as long as the shape drawn in the viewport.
+			[member length] is the arc length of [member spawn_curve], so the rope is exactly as long as the shape drawn in the viewport.
 		</constant>
 	</constants>
 </class>
