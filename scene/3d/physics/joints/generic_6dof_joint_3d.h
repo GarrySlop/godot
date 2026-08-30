@@ -85,12 +85,17 @@ protected:
 	bool angular_drive_torque_limit_set[3] = {};
 	bool setting_default_params = true;
 
+	Quaternion angular_target_rotation;
+	bool has_angular_target_rotation = false;
+
 	virtual void _configure_joint(RID p_joint, PhysicsBody3D *body_a, PhysicsBody3D *body_b) override;
 	static void _bind_methods();
 
 	static void _warn_if_deprecated_param(Param p_param);
 	void _set_drive_limit_explicit(Vector3::Axis p_axis, Param p_param);
 	bool _should_replay_param(Vector3::Axis p_axis, Param p_param) const;
+
+	static bool _is_valid_angular_target_rotation(const Quaternion &p_target_rotation);
 
 public:
 	void set_param_x(Param p_param, real_t p_value);
@@ -113,6 +118,11 @@ public:
 
 	float get_applied_force() const;
 	float get_applied_torque() const;
+
+	void set_angular_target_rotation(const Quaternion &p_target_rotation);
+	Quaternion get_angular_target_rotation() const;
+	bool has_target_rotation() const;
+	void clear_angular_target_rotation();
 
 	Generic6DOFJoint3D();
 };

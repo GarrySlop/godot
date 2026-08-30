@@ -452,6 +452,8 @@ public:
 
 	FUNC1RC(float, generic_6dof_joint_get_applied_force, RID)
 	FUNC1RC(float, generic_6dof_joint_get_applied_torque, RID)
+	FUNC2(generic_6dof_joint_set_angular_target_rotation, RID, const Quaternion &)
+	FUNC1RC(Quaternion, generic_6dof_joint_get_angular_target_rotation, RID)
 
 	FUNC1RC(JointType, joint_get_type, RID);
 

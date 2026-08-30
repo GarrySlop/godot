@@ -1008,14 +1008,22 @@ bool DisplayServerAndroid::should_swap_buffers() const {
 
 void DisplayServerAndroid::swap_buffers() {
 #ifdef GLES3_ENABLED
-	if (egl_owner_thread != Thread::UNASSIGNED_ID && egl_owner_thread == Thread::get_caller_id()) {
-		// We hold the context, so the Java rendering thread can no longer present on our
-		// behalf; do it here instead. In the single-threaded model nothing ever claims
-		// ownership, so we keep deferring to the Java rendering thread as before.
+	// Only Godot's rendering thread presents by itself. In the single-threaded model the
+	// Java rendering thread still owns presentation and swaps once step() returns, exactly
+	// as before; this must use the same predicate as OS_Android::main_loop_iterate() and
+	// the JNI step() hook, otherwise the frame gets presented twice or not at all.
+	if (OS::get_singleton()->is_separate_thread_rendering_enabled() && egl_owner_thread == Thread::get_caller_id()) {
 		EGLDisplay display = static_cast<EGLDisplay>(egl_display);
-		EGLSurface surface = eglGetCurrentSurface(EGL_DRAW);
-		if (display != EGL_NO_DISPLAY && surface != EGL_NO_SURFACE) {
-			eglSwapBuffers(display, surface);
+		EGLSurface surface = static_cast<EGLSurface>(egl_draw_surface);
+		if (display != EGL_NO_DISPLAY && surface != EGL_NO_SURFACE && !eglSwapBuffers(display, surface)) {
+			// The Java rendering thread recreates the window surface across pause/resume
+			// without telling us, so ours can go stale. Nothing on Android reads it anyway
+			// (OpenXR presents through the runtime's own swapchains, and post_draw_viewport()
+			// returns no blits there), so drop it instead of failing once per frame forever.
+			WARN_PRINT(vformat("EGL: eglSwapBuffers failed with 0x%x; the window surface is gone, presenting through it is now disabled.", (uint32_t)eglGetError()));
+			eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, static_cast<EGLContext>(egl_context));
+			egl_draw_surface = EGL_NO_SURFACE;
+			egl_read_surface = EGL_NO_SURFACE;
 		}
 		return;
 	}
@@ -1039,6 +1047,20 @@ void DisplayServerAndroid::_capture_egl_state() {
 void DisplayServerAndroid::gl_window_make_current(DisplayServerEnums::WindowID p_window_id) {
 #ifdef GLES3_ENABLED
 	if (rendering_driver != "opengl3" || p_window_id == DisplayServerEnums::INVALID_WINDOW_ID) {
+		return;
+	}
+
+	// In the single-threaded model the Java rendering thread keeps the context current for
+	// the whole frame and presents on our behalf. Nothing needs to change hands, and our
+	// cached surface may be older than the one it is holding, so stay out of the way.
+	if (!OS::get_singleton()->is_separate_thread_rendering_enabled()) {
+		return;
+	}
+
+	// RendererViewport::_draw_viewport() calls this once per viewport per frame, so the
+	// already-current case has to be free; the GL managers on the other platforms
+	// short-circuit here in the same way.
+	if (egl_owner_thread == Thread::get_caller_id()) {
 		return;
 	}
 
@@ -1078,7 +1100,7 @@ void DisplayServerAndroid::gl_window_make_current(DisplayServerEnums::WindowID p
 
 void DisplayServerAndroid::release_rendering_thread() {
 #ifdef GLES3_ENABLED
-	if (rendering_driver != "opengl3") {
+	if (rendering_driver != "opengl3" || !OS::get_singleton()->is_separate_thread_rendering_enabled()) {
 		return;
 	}
 

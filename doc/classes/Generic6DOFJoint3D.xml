@@ -10,6 +10,16 @@
 	<tutorials>
 	</tutorials>
 	<methods>
+		<method name="clear_angular_target_rotation">
+			<return type="void" />
+			<description>
+			</description>
+		</method>
+		<method name="get_angular_target_rotation" qualifiers="const">
+			<return type="Quaternion" />
+			<description>
+			</description>
+		</method>
 		<method name="get_applied_force" qualifiers="const">
 			<return type="float" />
 			<description>
@@ -55,6 +65,17 @@
 		<method name="get_param_z" qualifiers="const">
 			<return type="float" />
 			<param index="0" name="param" type="int" enum="Generic6DOFJoint3D.Param" />
+			<description>
+			</description>
+		</method>
+		<method name="has_target_rotation" qualifiers="const">
+			<return type="bool" />
+			<description>
+			</description>
+		</method>
+		<method name="set_angular_target_rotation">
+			<return type="void" />
+			<param index="0" name="target_rotation" type="Quaternion" />
 			<description>
 			</description>
 		</method>

@@ -61,6 +61,22 @@ constexpr int ROPE_MAX_CONTACTS_PER_SEGMENT = 4;
 // particle that moves into a surface part-way through the frame would find no plane to resolve
 // against and would pass straight through it.
 constexpr float ROPE_SPECULATIVE_MARGIN = 0.02f;
+// Fraction of any remaining penetration the contact velocity pass reclaims per frame. The relaxed
+// positional pass alone leaves a resting body sinking a little each frame until it drops out of the
+// speculative margin; recovering a share of the error as velocity is what makes a resting contact
+// actually rest. Kept well below 1 so recovery is spread over several frames rather than snapping.
+constexpr float ROPE_CONTACT_BIAS = 0.25f;
+// Penetration allowed to stand uncorrected. Without it a resting body never reaches equilibrium:
+// the relaxed positional pass always leaves a little overlap, the bias above always asks for
+// velocity to reclaim it, and that velocity is net positive work every frame. A plank resting on a
+// rope crept from 0.22 m/s to 1.47 m/s over five seconds and then tumbled off. With a slop band the
+// body settles just inside it, the bias goes to zero, and the contact stops doing work.
+constexpr float ROPE_CONTACT_SLOP = 0.004f;
+// Sweeps of the contact velocity solver. Four is measurably cheaper (0.535 ms against 0.582 ms on
+// eight loaded ropes) but lets a 30 kg load jitter 44 mm and drift 30 mm where eight holds it to
+// 8 mm and 3 mm, so the extra sweeps are worth their cost. Each one is O(contacts) and issues no
+// queries.
+constexpr int ROPE_CONTACT_VELOCITY_ITERATIONS = 8;
 
 // Ratio of a cable's along-axis drag coefficient to its crosswise one. Air resistance on a cylinder
 // is dominated by the component across its axis; sliding along its own length is nearly free by
@@ -1088,13 +1104,14 @@ void JoltRope3D::_gather_contacts(float p_step) {
 
 	const JoltRopeQueryFilter3D filter(*space, collision_mask, exceptions);
 
+	float max_speed_sq = 0.0f;
+
 	// One broadphase pass over the whole rope first. A hanging or swinging rope touches nothing on
 	// most frames, and this turns that common case into a single AABB test instead of one
 	// narrow-phase query per segment.
 	{
 		// Grown by how far the fastest particle can travel this frame, so a rope swinging into
 		// something is not rejected here before its segments ever reach the narrow phase.
-		float max_speed_sq = 0.0f;
 		for (uint32_t i = 0; i < count; i++) {
 			max_speed_sq = MAX(max_speed_sq, (float)velocities[i].length_squared());
 		}
@@ -1102,10 +1119,10 @@ void JoltRope3D::_gather_contacts(float p_step) {
 		AABB query_bounds = bounds;
 		query_bounds.grow_by(ROPE_SPECULATIVE_MARGIN + Math::sqrt(max_speed_sq) * p_step);
 
-		JoltQueryCollectorAny<JPH::CollideShapeBodyCollector> collector;
+		JoltQueryCollectorAll<JPH::CollideShapeBodyCollector, 32> collector;
 		space->get_broad_phase_query().CollideAABox(to_jolt(query_bounds), collector, filter, filter);
 
-		if (!collector.had_hit()) {
+		if (collector.get_hit_count() == 0) {
 			return;
 		}
 	}
@@ -1116,6 +1133,37 @@ void JoltRope3D::_gather_contacts(float p_step) {
 	// Without this a rope sliding across a triangle mesh snags on the internal edges between
 	// triangles, which is a very visible artifact.
 	settings.mActiveEdgeMode = JPH::EActiveEdgeMode::CollideOnlyWithActive;
+
+	// Bodies this rope is tied to, and how much rope around each knot the contact solver must keep
+	// its hands off.
+	//
+	// A knot is normally *inside* the thing it is tied to -- NewHubFR ties its 30 kg crate through an
+	// attachment 509 mm above the crate's origin, which is the top face of a 1 m crate, so the last
+	// segments of the rope are buried in it by construction. Colliding there means the rope spends
+	// every frame shoving away the body it is supposed to be holding, and the two fight: the crate
+	// jittered 4.7 mm per frame and the worst rope particle 55.7 mm, where excluding the crate by hand
+	// gave 0.001 mm and 0.000 mm. Holding that body is the attachment's job.
+	//
+	// Only the rope within one bounding radius of the knot is spared, so a long rope draped over the
+	// far side of the same crate still collides with it normally.
+	struct TiedBody {
+		JPH::BodyID id;
+		Vector3 knot;
+		float radius = 0.0f;
+	};
+	LocalVector<TiedBody> tied;
+	for (const KeyValue<int, Attachment> &E : attachments) {
+		const JoltBody3D *attached = E.value.body;
+		const JPH::Body *attached_jolt = (attached != nullptr && attached->in_space()) ? attached->get_jolt_body() : nullptr;
+		if (attached_jolt == nullptr) {
+			continue;
+		}
+		TiedBody entry;
+		entry.id = attached_jolt->GetID();
+		entry.knot = E.value.target;
+		entry.radius = attached_jolt->GetShape()->GetLocalBounds().GetExtent().Length();
+		tied.push_back(entry);
+	}
 
 	JoltQueryCollectorAll<JPH::CollideShapeCollector, 32> collector;
 
@@ -1165,6 +1213,17 @@ void JoltRope3D::_gather_contacts(float p_step) {
 			// gives the direction that pushes the rope away from the collider.
 			const Vector3 normal = -to_godot(hit.mPenetrationAxis.Normalized());
 			const Vector3 point = to_godot(hit.mContactPointOn2);
+
+			bool inside_knot = false;
+			for (const TiedBody &entry : tied) {
+				if (entry.id == hit.mBodyID2 && point.distance_to(entry.knot) < entry.radius) {
+					inside_knot = true;
+					break;
+				}
+			}
+			if (inside_knot) {
+				continue;
+			}
 
 			Contact contact;
 			contact.segment = (int)segment;
@@ -1744,6 +1803,123 @@ void JoltRope3D::_solve_direction_lock(Attachment &p_attachment, int p_index, fl
 	}
 }
 
+// How many contacts are currently within reach on each dynamic body, so the passes below can give
+// each one an equal share instead of every contact correcting the whole body by itself.
+void JoltRope3D::_count_active_contacts() {
+	for (ColliderInfo &info : colliders) {
+		info.active_contacts = 0;
+	}
+
+	for (const Contact &contact : contacts) {
+		ColliderInfo &info = colliders[contact.collider];
+		if (!info.dynamic) {
+			continue;
+		}
+
+		Vector3 plane_point = info.displaced(info.transform.xform(contact.local_point));
+		Vector3 plane_normal = info.transform.basis.xform(contact.local_normal);
+		plane_normal += info.rotation_delta.cross(plane_normal);
+
+		const float normal_length = (float)plane_normal.length();
+		if (normal_length < ROPE_EPSILON) {
+			continue;
+		}
+		plane_normal /= normal_length;
+
+		const float a = 1.0f - contact.t;
+		const float b = contact.t;
+		const Vector3 point = positions[contact.segment] * a + positions[contact.segment + 1] * b;
+
+		if ((float)(point - plane_point).dot(plane_normal) - radius <= ROPE_SPECULATIVE_MARGIN) {
+			info.active_contacts++;
+		}
+	}
+}
+
+// Second contact pass, run after the length constraints.
+//
+// `_solve_collisions()` splits a contact by inverse mass, which is right for two free bodies and
+// badly wrong for a rope pinned to the world. A 32-particle 1 kg rope carries 31 g per particle,
+// so against a 10 kg plank the split is 16.0 to 0.1 -- the rope absorbs 99.4% of the correction
+// and moves out of the way, and the plank falls straight through a rope that in reality is
+// anchored at both ends and could hold it with pure tension. Raising the rope's mass barely helps:
+// at 10 kg the plank still only takes 6% of the correction.
+//
+// The missing term is the anchors. A taut rope cannot yield, so its effective mass at a contact is
+// not its particle mass but the world's. Rather than try to estimate that -- it depends on how
+// taut the rope is, which is exactly what the length solve has just finished deciding -- this pass
+// simply looks at what is still penetrating *after* `_solve_lra()`, `_solve_distance()` and
+// `_solve_strain_limit()` have had their say, and hands all of it to the body.
+//
+// That is self-gating, which is what makes it safe. A slack rope was free to move, so the first
+// pass resolved the contact and nothing is left here. A taut rope was hauled back into the body by
+// the length constraints, and the penetration that survives is precisely the part the rope has no
+// remaining freedom to fix. Only dynamic bodies are touched: a static collider has nothing to push
+// and the rope has already been pushed out of it.
+void JoltRope3D::_solve_collisions_anchored() {
+	if (!two_way_coupling) {
+		return;
+	}
+
+	// A long body lying across a rope touches it at many segments at once, and every one of those
+	// contacts would otherwise apply a full rigid-body correction of its own -- N-fold over-correction,
+	// and because the contacts sit at different levers their rotational halves do not cancel in a
+	// single sweep. A 10 kg plank dropped across two ropes was pitched to 45 degrees on impact and
+	// tumbling inside a second. Averaging over the contacts active on each body fixes both.
+	_count_active_contacts();
+
+	for (const Contact &contact : contacts) {
+		ColliderInfo &info = colliders[contact.collider];
+		if (!info.dynamic || info.active_contacts == 0) {
+			continue;
+		}
+
+		Vector3 plane_point = info.transform.xform(contact.local_point);
+		Vector3 plane_normal = info.transform.basis.xform(contact.local_normal);
+		plane_normal += info.rotation_delta.cross(plane_normal);
+		plane_point = info.displaced(plane_point);
+
+		const float normal_length = (float)plane_normal.length();
+		if (normal_length < ROPE_EPSILON) {
+			continue;
+		}
+		plane_normal /= normal_length;
+
+		const int i = contact.segment;
+		const int j = contact.segment + 1;
+
+		const float a = 1.0f - contact.t;
+		const float b = contact.t;
+
+		const Vector3 point = positions[i] * a + positions[j] * b;
+
+		const float separation = (float)(point - plane_point).dot(plane_normal) - radius;
+		const float overlap = -separation - ROPE_CONTACT_SLOP;
+		if (overlap <= 0.0f) {
+			continue;
+		}
+
+		const float share = 1.0f / (float)info.active_contacts;
+
+		// The rope side is deliberately absent from `w`: this pass exists precisely because the rope
+		// has run out of room, so it is treated as immovable and the body takes the whole correction.
+		const Vector3 lever = plane_point - (info.com + info.position_delta);
+		const Vector3 lever_cross = lever.cross(plane_normal);
+		const float w = info.inv_mass + (float)lever_cross.dot(info.inv_inertia.xform(lever_cross));
+		if (w <= 0.0f) {
+			continue;
+		}
+
+		const Vector3 impulse = plane_normal * (overlap * share / w);
+
+		info.position_delta -= impulse * info.inv_mass;
+		info.rotation_delta -= info.inv_inertia.xform(lever.cross(impulse));
+
+		info.linear_impulse -= impulse / frame_step;
+		info.angular_impulse -= lever.cross(impulse) / frame_step;
+	}
+}
+
 void JoltRope3D::_solve_collisions(float p_step) {
 	for (const Contact &contact : contacts) {
 		ColliderInfo &info = colliders[contact.collider];
@@ -2230,6 +2406,158 @@ void JoltRope3D::_update_bounds() {
 // Everything here works against the body's *real* Jolt pose rather than the substep proxy. The proxy
 // is a bookkeeping device for making the position solve converge; it is never applied to Jolt, so
 // the error this pass has to answer for is the one measured against the real pose.
+// Velocity half of the rope-vs-body contact constraint, as a sequential-impulse solver.
+//
+// `_solve_collisions_anchored()` stops a body penetrating, but its impulse is relaxed by
+// `ROPE_REACTION_RELAXATION` on the way out, and a relaxed positional correction can never fully
+// cancel a sustained load. Something has to supply the steady normal impulse that holds a resting
+// body up; this is it.
+//
+// The formulation matters. An earlier version applied `velocity / w` per contact and simply refused
+// to pull, which sounds one-sided but is not: the contacts under a plank all share a normal, none of
+// them can give impulse back, and so the group over-applies and the body bounces. Damping that with
+// a 1/N share traded the bounce for a permanent shortfall -- one sweep then removes only
+// 1 - (1 - 1/N)^N, about 63%, of the residual, and a resting plank sank at exactly that deficit --
+// and iterating to recover the rest diverged instead of converging.
+//
+// Accumulating the impulse per contact and clamping the *total* to stay non-negative fixes both. A
+// sweep that over-shoots is undone by the next one (the delta simply goes negative, bounded by
+// never letting the total fall below zero), so the group converges monotonically and can be iterated
+// to whatever accuracy is wanted. That is the standard result for contact groups, and it is what
+// lets the share go away entirely.
+void JoltRope3D::_solve_contact_velocities() {
+	if (!two_way_coupling) {
+		return;
+	}
+
+	_count_active_contacts();
+
+	for (Contact &contact : contacts) {
+		contact.normal_lambda = 0.0f;
+		contact.tangent_lambda = Vector3();
+	}
+
+	for (int iteration = 0; iteration < ROPE_CONTACT_VELOCITY_ITERATIONS; iteration++) {
+		for (Contact &contact : contacts) {
+			ColliderInfo &info = colliders[contact.collider];
+			if (!info.dynamic || info.active_contacts == 0) {
+				continue;
+			}
+
+			Vector3 plane_point = info.transform.xform(contact.local_point);
+			Vector3 plane_normal = info.transform.basis.xform(contact.local_normal);
+			plane_normal += info.rotation_delta.cross(plane_normal);
+			plane_point = info.displaced(plane_point);
+
+			const float normal_length = (float)plane_normal.length();
+			if (normal_length < ROPE_EPSILON) {
+				continue;
+			}
+			plane_normal /= normal_length;
+
+			const int i = contact.segment;
+			const int j = contact.segment + 1;
+
+			const float a = 1.0f - contact.t;
+			const float b = contact.t;
+
+			const Vector3 point = positions[i] * a + positions[j] * b;
+
+			// Speculative: act while the body is still short of the rope, so it is brought to rest on
+			// the surface rather than after it has already buried itself in it.
+			const float separation = (float)(point - plane_point).dot(plane_normal) - radius;
+			if (separation > ROPE_SPECULATIVE_MARGIN) {
+				continue;
+			}
+
+			// The velocity the body will have once every impulse accumulated so far lands.
+			const Vector3 body_linear = info.linear_velocity + info.linear_impulse * info.inv_mass;
+			const Vector3 body_angular = info.angular_velocity + info.inv_inertia.xform(info.angular_impulse);
+			const Vector3 lever = plane_point - (info.com + info.position_delta);
+			const Vector3 point_velocity = body_linear + body_angular.cross(lever);
+
+			const Vector3 rope_velocity = velocities[i] * a + velocities[j] * b;
+
+			// `plane_normal` pushes the rope away from the body, so a positive relative speed along it
+			// is the body closing on the rope. Measured against the rope's own motion rather than
+			// against the world, so the rope can also catch a body it is swinging into.
+			real_t target = (point_velocity - rope_velocity).dot(plane_normal);
+
+			// Overlapping past the slop band: ask for enough extra speed to give back a share of it.
+			// Inside the band nothing is added, which is what lets a resting contact reach equilibrium
+			// instead of being fed energy forever.
+			if (separation < -ROPE_CONTACT_SLOP) {
+				target += (real_t)(-separation - ROPE_CONTACT_SLOP) * (real_t)ROPE_CONTACT_BIAS / (real_t)frame_step;
+			}
+
+			const Vector3 lever_cross = lever.cross(plane_normal);
+			const real_t w = (real_t)info.inv_mass + lever_cross.dot(info.inv_inertia.xform(lever_cross));
+			if (w <= (real_t)0.0) {
+				continue;
+			}
+
+			// Clamp the accumulated total, not this sweep's delta: that is what allows a later sweep to
+			// take back an earlier over-correction while still never letting the contact pull.
+			const real_t previous = contact.normal_lambda;
+			const real_t updated = MAX(previous + target / w, (real_t)0.0);
+			contact.normal_lambda = updated;
+
+			const real_t applied = updated - previous;
+			if (Math::abs(applied) < (real_t)ROPE_EPSILON) {
+				continue;
+			}
+
+			const Vector3 reaction = plane_normal * applied;
+			info.linear_impulse -= reaction;
+			info.angular_impulse -= lever.cross(reaction);
+
+			// Friction on the *body*.
+			//
+			// `_solve_collisions()` has position-level friction, but it only ever damps the rope's own
+			// particles -- nothing has ever resisted a body sliding across a rope. A plank dropped
+			// across two ropes sat at the right height indefinitely and simply walked sideways off
+			// them, about 0.4 mm per frame, until it ran out of rope and dropped past the end. That
+			// reads as "fell through" and is really "slid off".
+			const real_t combined_friction = (real_t)friction * (real_t)info.friction;
+			if (combined_friction <= (real_t)0.0 || contact.normal_lambda <= (real_t)0.0) {
+				continue;
+			}
+
+			// Recomputed after the normal impulse above, so friction acts on the velocity the body is
+			// actually left with.
+			const Vector3 post_linear = info.linear_velocity + info.linear_impulse * info.inv_mass;
+			const Vector3 post_angular = info.angular_velocity + info.inv_inertia.xform(info.angular_impulse);
+			const Vector3 relative = (post_linear + post_angular.cross(lever)) - rope_velocity;
+
+			Vector3 tangent = relative - plane_normal * relative.dot(plane_normal);
+			const real_t tangent_speed = tangent.length();
+			if (tangent_speed < (real_t)ROPE_EPSILON) {
+				continue;
+			}
+			tangent /= tangent_speed;
+
+			const Vector3 tangent_cross = lever.cross(tangent);
+			const real_t tangent_w = (real_t)info.inv_mass + tangent_cross.dot(info.inv_inertia.xform(tangent_cross));
+			if (tangent_w <= (real_t)0.0) {
+				continue;
+			}
+
+			// Coulomb: the accumulated tangential impulse may not exceed mu times the accumulated
+			// normal one. Clamping the total rather than the increment is what keeps this stable when
+			// the sweep runs more than once and the tangent direction shifts between sweeps.
+			const Vector3 wanted = contact.tangent_lambda + tangent * (tangent_speed / tangent_w);
+			const real_t limit = combined_friction * contact.normal_lambda;
+			const Vector3 clamped = wanted.length() > limit ? wanted.normalized() * limit : wanted;
+
+			const Vector3 friction_impulse = clamped - contact.tangent_lambda;
+			contact.tangent_lambda = clamped;
+
+			info.linear_impulse -= friction_impulse;
+			info.angular_impulse -= lever.cross(friction_impulse);
+		}
+	}
+}
+
 void JoltRope3D::_solve_velocities() {
 	for (const KeyValue<int, Attachment> &E : attachments) {
 		const Attachment &attachment = E.value;
@@ -2464,6 +2792,9 @@ void JoltRope3D::step(float p_step) {
 		_solve_lra();
 		_solve_distance(substep);
 		_solve_strain_limit();
+		// The rope's final pose for this substep is now known, so anything still penetrating is
+		// penetration the rope has no freedom left to resolve. It belongs to the body.
+		_solve_collisions_anchored();
 		_update_velocities(substep);
 	}
 
@@ -2481,6 +2812,7 @@ void JoltRope3D::step(float p_step) {
 	_finalize_reactions();
 	_solve_twist(p_step);
 	_solve_velocities();
+	_solve_contact_velocities();
 	_apply_reactions();
 
 	_update_bounds();

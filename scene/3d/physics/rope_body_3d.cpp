@@ -1035,7 +1035,7 @@ struct RopeAreaProbe {
 
 	~RopeAreaProbe() {
 		if (shape.is_valid()) {
-			PhysicsServer3D::get_singleton()->free(shape);
+			PhysicsServer3D::get_singleton()->free_rid(shape);
 		}
 	}
 };

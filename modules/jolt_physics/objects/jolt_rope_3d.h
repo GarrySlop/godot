@@ -180,6 +180,8 @@ private:
 		// count and the rope transmitted more force the more accurately it was solved.
 		Vector3 linear_impulse;
 		Vector3 angular_impulse;
+		// Contacts within reach this substep, for equal-share correction.
+		int active_contacts = 0;
 
 		// Where a point that started the frame at `p_world` has been moved to by our corrections.
 		Vector3 displaced(const Vector3 &p_world) const {
@@ -193,6 +195,12 @@ private:
 		int collider = 0;
 		Vector3 local_point;
 		Vector3 local_normal;
+		// Accumulated normal impulse for this contact, clamped to stay non-negative across the solver
+		// sweeps. This is what makes the contact group converge under iteration instead of diverging:
+		// without it every sweep re-applies a full push and N contacts sharing a normal compound.
+		real_t normal_lambda = 0.0f;
+		// Accumulated tangential impulse, Coulomb-clamped against `normal_lambda`.
+		Vector3 tangent_lambda;
 	};
 
 	RID rid;
@@ -327,6 +335,12 @@ private:
 	void _solve_direction_lock(Attachment &p_attachment, int p_index, float p_step);
 	void _carry_locks(Attachment &p_attachment, int p_index, AttachMode p_mode, const RID &p_body_rid);
 	void _solve_collisions(float p_step);
+	// Second contact pass, after the length constraints have run. See the definition for why a taut
+	// rope has to hand the residual penetration to the body rather than absorbing it.
+	void _count_active_contacts();
+	void _solve_collisions_anchored();
+	// Velocity half of the contact constraint, to `_solve_collisions_anchored()`'s positional half.
+	void _solve_contact_velocities();
 	void _update_velocities(float p_step);
 	void _solve_velocities();
 	void _finalize_reactions();
